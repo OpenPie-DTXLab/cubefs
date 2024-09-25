@@ -833,6 +833,7 @@ type MetaPartitionReport struct {
 	FreeListLen      uint64
 	UidInfo          []*UidReportSpaceInfo
 	QuotaReportInfos []*QuotaReportInfo
+	LocalPeers       []Peer
 }
 
 // MetaNodeHeartbeatResponse defines the response to the meta node heartbeat request.

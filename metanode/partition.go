@@ -820,15 +820,26 @@ func (mp *metaPartition) onStop() {
 
 func (mp *metaPartition) startRaft() (err error) {
 	var (
-		heartbeatPort int
-		replicaPort   int
-		peers         []raftstore.PeerAddress
+		defaultHeartbeatPort int
+		defaultReplicaPort   int
+		peers                []raftstore.PeerAddress
 	)
-	if heartbeatPort, replicaPort, err = mp.getRaftPort(); err != nil {
+
+	if defaultHeartbeatPort, defaultReplicaPort, err = mp.getRaftPort(); err != nil {
 		return
 	}
 	for _, peer := range mp.config.Peers {
 		addr := strings.Split(peer.Addr, ":")[0]
+
+		heartbeatPort, perr := strconv.Atoi(peer.HeartbeatPort)
+		if perr != nil {
+			heartbeatPort = defaultHeartbeatPort
+		}
+		replicaPort, perr := strconv.Atoi(peer.ReplicaPort)
+		if perr != nil {
+			replicaPort = defaultReplicaPort
+		}
+
 		rp := raftstore.PeerAddress{
 			Peer: raftproto.Peer{
 				ID: peer.ID,
@@ -908,6 +919,18 @@ func NewMetaPartition(conf *MetaPartitionConfig, manager *metadataManager) MetaP
 		},
 		enableAuditLog: true,
 	}
+
+	// during upgrade process, create partition request may lack raft ports info
+	defaultHeartbeatPort, defaultReplicaPort, err := mp.getRaftPort()
+	if err == nil {
+		for i := range mp.config.Peers {
+			if len(mp.config.Peers[i].ReplicaPort) == 0 || len(mp.config.Peers[i].HeartbeatPort) == 0 {
+				mp.config.Peers[i].ReplicaPort = strconv.FormatInt(int64(defaultReplicaPort), 10)
+				mp.config.Peers[i].HeartbeatPort = strconv.FormatInt(int64(defaultHeartbeatPort), 10)
+			}
+		}
+	}
+
 	mp.txProcessor = NewTransactionProcessor(mp)
 	return mp
 }

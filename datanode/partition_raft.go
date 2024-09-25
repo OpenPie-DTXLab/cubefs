@@ -91,9 +91,9 @@ func (dp *DataPartition) StartRaft(isLoad bool) (err error) {
 	}
 
 	var (
-		heartbeatPort int
-		replicaPort   int
-		peers         []raftstore.PeerAddress
+		defaultHeartbeatPort int
+		defaultReplicaPort   int
+		peers                []raftstore.PeerAddress
 	)
 	defer func() {
 		if r := recover(); r != nil {
@@ -108,11 +108,21 @@ func (dp *DataPartition) StartRaft(isLoad bool) (err error) {
 		}
 	}()
 
-	if heartbeatPort, replicaPort, err = dp.raftPort(); err != nil {
+	if defaultHeartbeatPort, defaultReplicaPort, err = dp.raftPort(); err != nil {
 		return
 	}
 	for _, peer := range dp.config.Peers {
 		addr := strings.Split(peer.Addr, ":")[0]
+
+		heartbeatPort, perr := strconv.Atoi(peer.HeartbeatPort)
+		if perr != nil {
+			heartbeatPort = defaultHeartbeatPort
+		}
+		replicaPort, perr := strconv.Atoi(peer.ReplicaPort)
+		if perr != nil {
+			replicaPort = defaultReplicaPort
+		}
+
 		rp := raftstore.PeerAddress{
 			Peer: raftproto.Peer{
 				ID: peer.ID,
@@ -406,12 +416,24 @@ func (dp *DataPartition) addRaftNode(req *proto.AddDataPartitionRaftMemberReques
 	}
 
 	var (
-		heartbeatPort int
-		replicaPort   int
+		defaultHeartbeatPort int
+		defaultReplicaPort   int
 	)
-	if heartbeatPort, replicaPort, err = dp.raftPort(); err != nil {
+	if defaultHeartbeatPort, defaultReplicaPort, err = dp.raftPort(); err != nil {
 		return
 	}
+
+	heartbeatPort, perr := strconv.Atoi(req.AddPeer.HeartbeatPort)
+	if perr != nil {
+		heartbeatPort = defaultHeartbeatPort
+	}
+
+	replicaPort, perr := strconv.Atoi(req.AddPeer.ReplicaPort)
+	if perr != nil {
+		replicaPort = defaultReplicaPort
+		return
+	}
+
 	log.LogInfof("action[addRaftNode] add raft node peer [%v]", req.AddPeer)
 	found := false
 	for _, peer := range dp.config.Peers {
@@ -568,8 +590,6 @@ func (s *DataNode) parseRaftConfig(cfg *config.Config) (err error) {
 
 func (s *DataNode) startRaftServer(cfg *config.Config) (err error) {
 	log.LogInfo("Start: startRaftServer")
-
-	s.parseRaftConfig(cfg)
 
 	if s.clusterUuidEnable {
 		if err = config.CheckOrStoreClusterUuid(s.raftDir, s.clusterUuid, false); err != nil {

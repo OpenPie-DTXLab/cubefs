@@ -513,6 +513,7 @@ func formatMetaPartitionInfo(partition *proto.MetaPartitionInfo) string {
 	}
 	sb.WriteString("\n")
 	sb.WriteString("Peers :\n")
+	sb.WriteString(fmt.Sprintf("%v\n", formatPeerTableHeader()))
 	for _, peer := range partition.Peers {
 		sb.WriteString(fmt.Sprintf("%v\n", formatPeer(peer)))
 	}
@@ -752,14 +753,14 @@ func formatMetaReplica(indentation string, replica *proto.MetaReplicaInfo, rowTa
 	return sb.String()
 }
 
-var peerTableRowPattern = "%-6v    %-18v"
+var peerTableRowPattern = "%-6v    %-18v    %-12v    %-12v"
 
 func formatPeerTableHeader() string {
-	return fmt.Sprintf(peerTableRowPattern, "ID", "PEER")
+	return fmt.Sprintf(peerTableRowPattern, "ID", "ADDR", "HEARTBEATPORT", "REPLICAPORT")
 }
 
 func formatPeer(peer proto.Peer) string {
-	return fmt.Sprintf(peerTableRowPattern, peer.ID, peer.Addr)
+	return fmt.Sprintf(peerTableRowPattern, peer.ID, peer.Addr, peer.HeartbeatPort, peer.ReplicaPort)
 }
 
 var dataNodeDetailTableRowPattern = "%-6v    %-6v    %-65v    %-6v    %-6v    %-6v    %-10v"
@@ -776,6 +777,8 @@ func formatDataNodeDetail(dn *proto.DataNodeInfo, rowTable bool) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("  ID                  : %v\n", dn.ID))
 	sb.WriteString(fmt.Sprintf("  Address             : %v\n", formatAddr(dn.Addr, dn.DomainAddr)))
+	sb.WriteString(fmt.Sprintf("  RaftHeartbeatPort   : %v\n", dn.RaftHeartbeatPort))
+	sb.WriteString(fmt.Sprintf("  RaftReplicaPort     : %v\n", dn.RaftReplicaPort))
 	sb.WriteString(fmt.Sprintf("  Allocated ratio     : %v\n", dn.UsageRatio))
 	sb.WriteString(fmt.Sprintf("  Allocated           : %v\n", formatSize(dn.Used)))
 	sb.WriteString(fmt.Sprintf("  Available           : %v\n", formatSize(dn.AvailableSpace)))
@@ -814,6 +817,8 @@ func formatMetaNodeDetail(mn *proto.MetaNodeInfo, rowTable bool) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("  ID                  : %v\n", mn.ID))
 	sb.WriteString(fmt.Sprintf("  Address             : %v\n", formatAddr(mn.Addr, mn.DomainAddr)))
+	sb.WriteString(fmt.Sprintf("  RaftHeartbeatPort   : %v\n", mn.RaftHeartbeatPort))
+	sb.WriteString(fmt.Sprintf("  RaftReplicaPort     : %v\n", mn.RaftReplicaPort))
 	sb.WriteString(fmt.Sprintf("  Threshold           : %v\n", mn.Threshold))
 	sb.WriteString(fmt.Sprintf("  MaxMemAvailWeight   : %v\n", formatSize(mn.MaxMemAvailWeight)))
 	sb.WriteString(fmt.Sprintf("  Allocated           : %v\n", formatSize(mn.Used)))

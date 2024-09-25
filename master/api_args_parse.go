@@ -165,7 +165,7 @@ func parseRequestForUpdateMetaNode(r *http.Request) (nodeAddr string, id uint64,
 	return
 }
 
-func parseRequestForAddNode(r *http.Request) (nodeAddr, zoneName string, err error) {
+func parseRequestForAddNode(r *http.Request) (nodeAddr, raftHeartbeatPort, raftReplicaPort, zoneName string, err error) {
 	if err = r.ParseForm(); err != nil {
 		return
 	}
@@ -175,6 +175,10 @@ func parseRequestForAddNode(r *http.Request) (nodeAddr, zoneName string, err err
 	if zoneName = r.FormValue(zoneNameKey); zoneName == "" {
 		zoneName = DefaultZoneName
 	}
+	// for old version node registration, heartbeat port and replica port may be empty
+	raftHeartbeatPort = r.FormValue(heartbeatPortKey)
+	raftReplicaPort = r.FormValue(replicaPortKey)
+
 	return
 }
 

@@ -420,6 +420,8 @@ type dataNodeValue struct {
 	ID                       uint64
 	NodeSetID                uint64
 	Addr                     string
+	HeartbeatPort            string
+	ReplicaPort              string
 	ZoneName                 string
 	RdOnly                   bool
 	DecommissionedDisks      []string
@@ -439,6 +441,8 @@ func newDataNodeValue(dataNode *DataNode) *dataNodeValue {
 		ID:                       dataNode.ID,
 		NodeSetID:                dataNode.NodeSetID,
 		Addr:                     dataNode.Addr,
+		HeartbeatPort:            dataNode.HeartbeatPort,
+		ReplicaPort:              dataNode.ReplicaPort,
 		ZoneName:                 dataNode.ZoneName,
 		RdOnly:                   dataNode.RdOnly,
 		DecommissionedDisks:      dataNode.getDecommissionedDisks(),
@@ -455,20 +459,24 @@ func newDataNodeValue(dataNode *DataNode) *dataNodeValue {
 }
 
 type metaNodeValue struct {
-	ID        uint64
-	NodeSetID uint64
-	Addr      string
-	ZoneName  string
-	RdOnly    bool
+	ID            uint64
+	NodeSetID     uint64
+	Addr          string
+	HeartbeatPort string
+	ReplicaPort   string
+	ZoneName      string
+	RdOnly        bool
 }
 
 func newMetaNodeValue(metaNode *MetaNode) *metaNodeValue {
 	return &metaNodeValue{
-		ID:        metaNode.ID,
-		NodeSetID: metaNode.NodeSetID,
-		Addr:      metaNode.Addr,
-		ZoneName:  metaNode.ZoneName,
-		RdOnly:    metaNode.RdOnly,
+		ID:            metaNode.ID,
+		NodeSetID:     metaNode.NodeSetID,
+		Addr:          metaNode.Addr,
+		HeartbeatPort: metaNode.HeartbeatPort,
+		ReplicaPort:   metaNode.ReplicaPort,
+		ZoneName:      metaNode.ZoneName,
+		RdOnly:        metaNode.RdOnly,
 	}
 }
 
@@ -1467,7 +1475,7 @@ func (c *Cluster) loadDataNodes() (err error) {
 		if dnv.ZoneName == "" {
 			dnv.ZoneName = DefaultZoneName
 		}
-		dataNode := newDataNode(dnv.Addr, dnv.ZoneName, c.Name)
+		dataNode := newDataNode(dnv.Addr, dnv.HeartbeatPort, dnv.ReplicaPort, dnv.ZoneName, c.Name)
 		dataNode.DpCntLimit = newLimitCounter(&c.cfg.MaxDpCntLimit, defaultMaxDpCntLimit)
 		dataNode.ID = dnv.ID
 		dataNode.NodeSetID = dnv.NodeSetID
@@ -1518,7 +1526,7 @@ func (c *Cluster) loadMetaNodes() (err error) {
 		if mnv.ZoneName == "" {
 			mnv.ZoneName = DefaultZoneName
 		}
-		metaNode := newMetaNode(mnv.Addr, mnv.ZoneName, c.Name)
+		metaNode := newMetaNode(mnv.Addr, mnv.HeartbeatPort, mnv.ReplicaPort, mnv.ZoneName, c.Name)
 		metaNode.MpCntLimit = newLimitCounter(&c.cfg.MaxMpCntLimit, defaultMaxMpCntLimit)
 		metaNode.ID = mnv.ID
 		metaNode.NodeSetID = mnv.NodeSetID

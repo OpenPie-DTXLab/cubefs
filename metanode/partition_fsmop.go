@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,11 +96,20 @@ func (mp *metaPartition) fsmUpdatePartition(end uint64) (status uint8,
 
 func (mp *metaPartition) confAddNode(req *proto.AddMetaPartitionRaftMemberRequest, index uint64) (updated bool, err error) {
 	var (
-		heartbeatPort int
-		replicaPort   int
+		defaultHeartbeatPort int
+		defaultreplicaPort   int
 	)
-	if heartbeatPort, replicaPort, err = mp.getRaftPort(); err != nil {
+
+	if defaultHeartbeatPort, defaultreplicaPort, err = mp.getRaftPort(); err != nil {
 		return
+	}
+	heartbeatPort, perr := strconv.Atoi(req.AddPeer.HeartbeatPort)
+	if perr != nil {
+		heartbeatPort = defaultHeartbeatPort
+	}
+	replicaPort, perr := strconv.Atoi(req.AddPeer.ReplicaPort)
+	if perr != nil {
+		replicaPort = defaultreplicaPort
 	}
 
 	addPeer := false
