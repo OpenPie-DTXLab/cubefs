@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cubefs/cubefs/raftstore"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -152,7 +153,7 @@ func parseRequestForUpdateMetaNode(r *http.Request) (nodeAddr string, id uint64,
 	return
 }
 
-func parseRequestForAddNode(r *http.Request) (nodeAddr, zoneName string, err error) {
+func parseRequestForAddNode(r *http.Request) (nodeAddr, raftHeartbeatPort, raftReplicaPort, zoneName string, err error) {
 	if err = r.ParseForm(); err != nil {
 		return
 	}
@@ -161,6 +162,13 @@ func parseRequestForAddNode(r *http.Request) (nodeAddr, zoneName string, err err
 	}
 	if zoneName = r.FormValue(zoneNameKey); zoneName == "" {
 		zoneName = DefaultZoneName
+	}
+	if raftHeartbeatPort = r.FormValue(heartbeatPortKey); raftHeartbeatPort == "" {
+		raftHeartbeatPort = strconv.Itoa(raftstore.DefaultHeartbeatPort)
+	}
+
+	if raftReplicaPort = r.FormValue(replicaPortKey); raftReplicaPort == "" {
+		raftReplicaPort = strconv.Itoa(raftstore.DefaultReplicaPort)
 	}
 	return
 }

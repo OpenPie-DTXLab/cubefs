@@ -26,9 +26,11 @@ type NodeAPI struct {
 	mc *MasterClient
 }
 
-func (api *NodeAPI) AddDataNode(serverAddr, zoneName string) (id uint64, err error) {
+func (api *NodeAPI) AddDataNode(serverAddr, raftHeartbeatPort, raftReplicaPort, zoneName string) (id uint64, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.AddDataNode)
 	request.addParam("addr", serverAddr)
+	request.addParam("heartbeatPort", raftHeartbeatPort)
+	request.addParam("replicaPort", raftReplicaPort)
 	request.addParam("zoneName", zoneName)
 	var data []byte
 	if data, err = api.mc.serveRequest(request); err != nil {
@@ -38,9 +40,11 @@ func (api *NodeAPI) AddDataNode(serverAddr, zoneName string) (id uint64, err err
 	return
 }
 
-func (api *NodeAPI) AddMetaNode(serverAddr, zoneName string) (id uint64, err error) {
+func (api *NodeAPI) AddMetaNode(serverAddr, raftHeartbeatPort, raftReplicatePort, zoneName string) (id uint64, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.AddMetaNode)
 	request.addParam("addr", serverAddr)
+	request.addParam("heartbeatPort", raftHeartbeatPort)
+	request.addParam("replicaPort", raftReplicatePort)
 	request.addParam("zoneName", zoneName)
 	var data []byte
 	if data, err = api.mc.serveRequest(request); err != nil {

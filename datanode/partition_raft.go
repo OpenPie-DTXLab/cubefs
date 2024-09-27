@@ -51,28 +51,28 @@ type dataPartitionCfg struct {
 	Forbidden     bool
 }
 
-func (dp *DataPartition) raftPort() (heartbeat, replica int, err error) {
-	raftConfig := dp.config.RaftStore.RaftConfig()
-	heartbeatAddrSplits := strings.Split(raftConfig.HeartbeatAddr, ":")
-	replicaAddrSplits := strings.Split(raftConfig.ReplicateAddr, ":")
-	if len(heartbeatAddrSplits) != 2 {
-		err = errors.New("illegal heartbeat address")
-		return
-	}
-	if len(replicaAddrSplits) != 2 {
-		err = errors.New("illegal replica address")
-		return
-	}
-	heartbeat, err = strconv.Atoi(heartbeatAddrSplits[1])
-	if err != nil {
-		return
-	}
-	replica, err = strconv.Atoi(replicaAddrSplits[1])
-	if err != nil {
-		return
-	}
-	return
-}
+//func (dp *DataPartition) raftPort() (heartbeat, replica int, err error) {
+//	raftConfig := dp.config.RaftStore.RaftConfig()
+//	heartbeatAddrSplits := strings.Split(raftConfig.HeartbeatAddr, ":")
+//	replicaAddrSplits := strings.Split(raftConfig.ReplicateAddr, ":")
+//	if len(heartbeatAddrSplits) != 2 {
+//		err = errors.New("illegal heartbeat address")
+//		return
+//	}
+//	if len(replicaAddrSplits) != 2 {
+//		err = errors.New("illegal replica address")
+//		return
+//	}
+//	heartbeat, err = strconv.Atoi(heartbeatAddrSplits[1])
+//	if err != nil {
+//		return
+//	}
+//	replica, err = strconv.Atoi(replicaAddrSplits[1])
+//	if err != nil {
+//		return
+//	}
+//	return
+//}
 
 // StartRaft start raft instance when data partition start or restore.
 func (dp *DataPartition) StartRaft(isLoad bool) (err error) {
@@ -104,11 +104,13 @@ func (dp *DataPartition) StartRaft(isLoad bool) (err error) {
 		}
 	}()
 
-	if heartbeatPort, replicaPort, err = dp.raftPort(); err != nil {
-		return
-	}
+	//if heartbeatPort, replicaPort, err = dp.raftPort(); err != nil {
+	//	return
+	//}
 	for _, peer := range dp.config.Peers {
 		addr := strings.Split(peer.Addr, ":")[0]
+		heartbeatPort, _ = strconv.Atoi(peer.HeartbeatPort)
+		replicaPort, _ = strconv.Atoi(peer.ReplicaPort)
 		rp := raftstore.PeerAddress{
 			Peer: raftproto.Peer{
 				ID: peer.ID,
@@ -374,9 +376,17 @@ func (dp *DataPartition) addRaftNode(req *proto.AddDataPartitionRaftMemberReques
 		heartbeatPort int
 		replicaPort   int
 	)
-	if heartbeatPort, replicaPort, err = dp.raftPort(); err != nil {
+
+	heartbeatPort, err = strconv.Atoi(req.AddPeer.HeartbeatPort)
+	if err != nil {
 		return
 	}
+
+	replicaPort, err = strconv.Atoi(req.AddPeer.ReplicaPort)
+	if err != nil {
+		return
+	}
+
 	log.LogInfof("action[addRaftNode] add raft node peer [%v]", req.AddPeer)
 	found := false
 	for _, peer := range dp.config.Peers {
@@ -532,8 +542,6 @@ func (s *DataNode) parseRaftConfig(cfg *config.Config) (err error) {
 
 func (s *DataNode) startRaftServer(cfg *config.Config) (err error) {
 	log.LogInfo("Start: startRaftServer")
-
-	s.parseRaftConfig(cfg)
 
 	if s.clusterUuidEnable {
 		if err = config.CheckOrStoreClusterUuid(s.raftDir, s.clusterUuid, false); err != nil {

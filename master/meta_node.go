@@ -48,15 +48,31 @@ type MetaNode struct {
 	PersistenceMetaPartitions []uint64
 	RdOnly                    bool
 	MigrateLock               sync.RWMutex
+	HeartbeatPort             string `json:"HeartbeatPort"`
+	ReplicaPort               string `json:"ReplicaPort"`
 }
 
-func newMetaNode(addr, zoneName, clusterID string) (node *MetaNode) {
+func newMetaNode(addr, heartbeatPort, replicaPort, zoneName, clusterID string) (node *MetaNode) {
 	return &MetaNode{
-		Addr:     addr,
-		ZoneName: zoneName,
-		Sender:   newAdminTaskManager(addr, clusterID),
-		Carry:    rand.Float64(),
+		Addr:          addr,
+		HeartbeatPort: heartbeatPort,
+		ReplicaPort:   replicaPort,
+		ZoneName:      zoneName,
+		Sender:        newAdminTaskManager(addr, clusterID),
+		Carry:         rand.Float64(),
 	}
+}
+
+func (metaNode *MetaNode) GetHeartbeatPort() string {
+	metaNode.RLock()
+	defer metaNode.RUnlock()
+	return metaNode.HeartbeatPort
+}
+
+func (metaNode *MetaNode) GetReplicaPort() string {
+	metaNode.RLock()
+	defer metaNode.RUnlock()
+	return metaNode.ReplicaPort
 }
 
 func (metaNode *MetaNode) clean() {

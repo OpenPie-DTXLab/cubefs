@@ -461,7 +461,7 @@ func (m *MetaNode) register() (err error) {
 			step++
 		}
 		var nodeID uint64
-		if nodeID, err = masterClient.NodeAPI().AddMetaNode(nodeAddress, m.zoneName); err != nil {
+		if nodeID, err = masterClient.NodeAPI().AddMetaNode(nodeAddress, m.raftHeartbeatPort, m.raftReplicatePort, m.zoneName); err != nil {
 			log.LogErrorf("register: register to master fail: address(%v) err(%s)", nodeAddress, err)
 			time.Sleep(3 * time.Second)
 			continue
