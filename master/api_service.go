@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+	"github.com/cubefs/cubefs/util/s3"
 	"io"
 	"math"
 	"net/http"
@@ -2366,6 +2369,96 @@ func (m *Server) updateVol(w http.ResponseWriter, r *http.Request) {
 	sendOkReply(w, r, newSuccessHTTPReply(response))
 }
 
+func (m *Server) volReplicationTargetAdd(w http.ResponseWriter, r *http.Request) {
+	var (
+		err               error
+		authKey           string
+		id                string
+		replicationTarget proto.ReplicationTarget
+		vol               *Vol
+	)
+	metric := exporter.NewTPCnt(apiToMetricsName(proto.AdminVolReplicationTargetAdd))
+	defer func() {
+		doStatAndMetric(proto.AdminVolReplicationTargetAdd, metric, err, map[string]string{exporter.Vol: replicationTarget.SourceVolume})
+	}()
+
+	if err = parseVolReplicationAddParams(r, &authKey, &replicationTarget); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+
+	if vol, err = m.cluster.getVol(replicationTarget.SourceVolume); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeVolNotExists, Msg: err.Error()})
+		return
+	}
+
+	id, err = vol.getReplicationTargetID(&replicationTarget)
+	if err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeBadReplicationTarget, Msg: err.Error()})
+		return
+	}
+	replicationTarget.ID = id
+
+	client := s3.CreateReplicationTargetClient(
+		replicationTarget.Endpoint, replicationTarget.AccessKey,
+		replicationTarget.SecretKey, replicationTarget.Secure, replicationTarget.Region)
+	_, err = client.HeadBucket(&awss3.HeadBucketInput{
+		Bucket: aws.String(replicationTarget.TargetVolume),
+	})
+
+	if err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+
+	newArgs := getVolVarargs(vol)
+	newArgs.replicationTargets = append(newArgs.replicationTargets, &replicationTarget)
+	if err = m.cluster.updateVol(replicationTarget.SourceVolume, authKey, newArgs); err != nil {
+		sendErrReply(w, r, newErrHTTPReply(err))
+		return
+	}
+
+	sendOkReply(w, r, newSuccessHTTPReply(id))
+}
+
+func (m *Server) volReplicationTargetRemove(w http.ResponseWriter, r *http.Request) {
+	var (
+		err      error
+		targetId string
+		volume   string
+		vol      *Vol
+	)
+	metric := exporter.NewTPCnt(apiToMetricsName(proto.AdminVolReplicationTargetRemove))
+	defer func() {
+		doStatAndMetric(proto.AdminVolReplicationTargetRemove, metric, err, map[string]string{exporter.Vol: volume})
+	}()
+
+	if volume, targetId, err = parseVolReplicationRemoveParams(r); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+
+	if vol, err = m.cluster.getVol(volume); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeVolNotExists, Msg: err.Error()})
+		return
+	}
+
+	oldArgs := getVolVarargs(vol)
+	if err = vol.removeReplicationTarget(targetId); err != nil {
+		sendErrReply(w, r, newErrHTTPReply(err))
+		return
+	}
+
+	if err = m.cluster.syncUpdateVol(vol); err != nil {
+		setVolFromArgs(oldArgs, vol)
+		log.LogErrorf("action[updateVol] vol[%v] err[%v]", volume, err)
+		sendErrReply(w, r, newErrHTTPReply(err))
+		return
+	}
+
+	sendOkReply(w, r, newSuccessHTTPReply("replication target removed successfully \n"))
+}
+
 func (m *Server) volExpand(w http.ResponseWriter, r *http.Request) {
 	var (
 		name     string
@@ -2675,6 +2768,7 @@ func (m *Server) getVolSimpleInfo(w http.ResponseWriter, r *http.Request) {
 
 func newSimpleView(vol *Vol) (view *proto.SimpleVolView) {
 	var (
+		err            error
 		volInodeCount  uint64
 		volDentryCount uint64
 	)
@@ -2741,6 +2835,14 @@ func newSimpleView(vol *Vol) (view *proto.SimpleVolView) {
 		EnableAutoDpMetaRepair:  vol.EnableAutoMetaRepair.Load(),
 		AccessTimeInterval:      vol.AccessTimeValidInterval,
 		EnablePersistAccessTime: vol.EnablePersistAccessTime,
+	}
+
+	if len(vol.replicationTargets) > 0 {
+		var replicationTargetsData []byte
+		if replicationTargetsData, err = json.Marshal(vol.replicationTargets); err != nil {
+			log.LogWarnf("error when serialize replication target of vol [%v],err :%v", vol.Name, err.Error())
+		}
+		view.ReplicationTargets = replicationTargetsData
 	}
 
 	vol.uidSpaceManager.rwMutex.RLock()
@@ -5154,11 +5256,12 @@ func (m *Server) getVol(w http.ResponseWriter, r *http.Request) {
 // Obtain the volume information such as total capacity and used space, etc.
 func (m *Server) getVolStatInfo(w http.ResponseWriter, r *http.Request) {
 	var (
-		err    error
-		name   string
-		ver    int
-		vol    *Vol
-		byMeta bool
+		err                 error
+		name                string
+		ver                 int
+		vol                 *Vol
+		byMeta              bool
+		fetchVolReplication bool
 	)
 
 	metric := exporter.NewTPCnt(apiToMetricsName(proto.ClientVolStat))
@@ -5166,7 +5269,7 @@ func (m *Server) getVolStatInfo(w http.ResponseWriter, r *http.Request) {
 		doStatAndMetric(proto.ClientVolStat, metric, err, map[string]string{exporter.Vol: name})
 	}()
 
-	if name, ver, byMeta, err = parseVolStatReq(r); err != nil {
+	if name, ver, byMeta, fetchVolReplication, err = parseVolStatReq(r); err != nil {
 		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
 		return
 	}
@@ -5181,10 +5284,11 @@ func (m *Server) getVolStatInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendOkReply(w, r, newSuccessHTTPReply(volStat(vol, byMeta)))
+	sendOkReply(w, r, newSuccessHTTPReply(volStat(vol, byMeta, fetchVolReplication)))
 }
 
-func volStat(vol *Vol, countByMeta bool) (stat *proto.VolStatInfo) {
+func volStat(vol *Vol, countByMeta, fetchVolReplication bool) (stat *proto.VolStatInfo) {
+	var err error
 	stat = new(proto.VolStatInfo)
 	stat.Name = vol.Name
 	stat.TotalSize = vol.Capacity * util.GB
@@ -5211,6 +5315,15 @@ func volStat(vol *Vol, countByMeta bool) (stat *proto.VolStatInfo) {
 
 	stat.TrashInterval = vol.TrashInterval
 	log.LogDebugf("total[%v],usedSize[%v] TrashInterval[%v]", stat.TotalSize, stat.UsedSize, stat.TrashInterval)
+
+	if len(vol.replicationTargets) > 0 && fetchVolReplication {
+		var replicationTargetsData []byte
+		if replicationTargetsData, err = json.Marshal(vol.replicationTargets); err != nil {
+			log.LogWarnf("error when serialize replication target of vol [%v],err :%v", vol.Name, err.Error())
+		}
+		stat.ReplicationTargets = replicationTargetsData
+	}
+
 	if proto.IsHot(vol.VolType) {
 		return
 	}
@@ -5350,7 +5463,7 @@ func (m *Server) listVols(w http.ResponseWriter, r *http.Request) {
 				sendErrReply(w, r, newErrHTTPReply(proto.ErrVolNotExists))
 				return
 			}
-			stat := volStat(vol, false)
+			stat := volStat(vol, false, false)
 			volInfo := proto.NewVolInfo(vol.Name, vol.Owner, vol.createTime, vol.status(), stat.TotalSize,
 				stat.UsedSize, stat.DpReadOnlyWhenVolFull)
 			volsInfo = append(volsInfo, volInfo)

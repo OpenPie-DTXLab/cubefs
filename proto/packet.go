@@ -95,16 +95,17 @@ const (
 	// Operations: MetaNode Leader -> MetaNode Follower
 	OpMetaFreeInodesOnRaftFollower uint8 = 0x32
 
-	OpMetaDeleteInode        uint8 = 0x33 // delete specified inode immediately and do not remove data.
-	OpMetaBatchExtentsAdd    uint8 = 0x34 // for extents batch attachment
-	OpMetaSetXAttr           uint8 = 0x35
-	OpMetaGetXAttr           uint8 = 0x36
-	OpMetaRemoveXAttr        uint8 = 0x37
-	OpMetaListXAttr          uint8 = 0x38
-	OpMetaBatchGetXAttr      uint8 = 0x39
-	OpMetaExtentAddWithCheck uint8 = 0x3A // Append extent key with discard extents check
-	OpMetaReadDirLimit       uint8 = 0x3D
-	OpMetaLockDir            uint8 = 0x3E
+	OpMetaDeleteInode         uint8 = 0x33 // delete specified inode immediately and do not remove data.
+	OpMetaBatchExtentsAdd     uint8 = 0x34 // for extents batch attachment
+	OpMetaSetXAttr            uint8 = 0x35
+	OpMetaGetXAttr            uint8 = 0x36
+	OpMetaRemoveXAttr         uint8 = 0x37
+	OpMetaListXAttr           uint8 = 0x38
+	OpMetaBatchGetXAttr       uint8 = 0x39
+	OpMetaExtentAddWithCheck  uint8 = 0x3A // Append extent key with discard extents check
+	OpMetaReadDirLimit        uint8 = 0x3D
+	OpMetaLockDir             uint8 = 0x3E
+	OpMetaAppendDeletedDentry uint8 = 0x3F
 
 	// Operations: Master -> MetaNode
 	OpCreateMetaPartition           uint8 = 0x40
@@ -116,6 +117,8 @@ const (
 	OpAddMetaPartitionRaftMember    uint8 = 0x46
 	OpRemoveMetaPartitionRaftMember uint8 = 0x47
 	OpMetaPartitionTryToLeader      uint8 = 0x48
+	OpMetaRemoveDeletedDentry       uint8 = 0x49
+	OpMetaListDeletedDentries       uint8 = 0x4A
 
 	// Quota
 	OpMetaBatchSetInodeQuota    uint8 = 0x50

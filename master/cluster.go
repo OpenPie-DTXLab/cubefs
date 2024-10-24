@@ -3334,6 +3334,7 @@ func (c *Cluster) updateVol(name, authKey string, newArgs *VolVarargs) (err erro
 		serverAuthKey string
 		volUsedSpace  uint64
 		oldArgs       *VolVarargs
+		targetNewAdd  *proto.ReplicationTarget
 	)
 
 	if vol, err = c.getVol(name); err != nil {
@@ -3371,6 +3372,14 @@ func (c *Cluster) updateVol(name, authKey string, newArgs *VolVarargs) (err erro
 	if newArgs.coldArgs.cacheCap >= newArgs.capacity {
 		err = fmt.Errorf("capacity must be large than cache capacity, newCap(%d), newCacheCap(%d)", newArgs.capacity, newArgs.coldArgs.cacheCap)
 		goto errHandler
+	}
+
+	targetNewAdd = newArgs.replicationTargets[len(newArgs.replicationTargets)-1:][0]
+	for _, t := range vol.replicationTargets {
+		if t.ID == targetNewAdd.ID {
+			err = fmt.Errorf("dumplicate replication target , ID %v", targetNewAdd.ID)
+			goto errHandler
+		}
 	}
 
 	oldArgs = getVolVarargs(vol)
@@ -4905,7 +4914,7 @@ func (c *Cluster) listQuotaAll() (volsInfo []*proto.VolInfo) {
 	defer c.volMutex.RUnlock()
 	for _, vol := range c.vols {
 		if vol.quotaManager.HasQuota() {
-			stat := volStat(vol, false)
+			stat := volStat(vol, false, false)
 			volInfo := proto.NewVolInfo(vol.Name, vol.Owner, vol.createTime, vol.status(), stat.TotalSize,
 				stat.UsedSize, stat.DpReadOnlyWhenVolFull)
 			volsInfo = append(volsInfo, volInfo)

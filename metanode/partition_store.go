@@ -52,6 +52,7 @@ const (
 	uniqIDFile              = "uniqID"
 	uniqCheckerFile         = "uniqChecker"
 	verdataFile             = "multiVer"
+	deletedDentryFile       = "ddentry"
 	StaleMetadataSuffix     = ".old"
 	StaleMetadataTimeFormat = "20060102150405.000000000"
 	verdataInitFile         = "multiVerInitFile"
@@ -827,6 +828,123 @@ func (mp *metaPartition) storeMultiVersion(rootDir string, sm *storeMsg) (crc ui
 	log.LogInfof("storeMultiVersion: store complete: partitionID(%v) volume(%v) applyID(%v) verData(%v) crc(%v)",
 		mp.config.PartitionId, mp.config.VolName, sm.applyIndex, string(verData), crc)
 	return
+}
+
+func (mp *metaPartition) storeDeletedDentry(rootDir string, sm *storeMsg) (crc uint32, err error) {
+	filename := path.Join(rootDir, deletedDentryFile)
+	fp, err := os.OpenFile(filename, os.O_RDWR|os.O_TRUNC|os.O_APPEND|os.
+		O_CREATE, 0o755)
+	if err != nil {
+		return
+	}
+	defer func() {
+		err = fp.Sync()
+		fp.Close()
+	}()
+
+	var data []byte
+	lenBuf := make([]byte, 4)
+	sign := crc32.NewIEEE()
+
+	for _, dentry := range sm.deletedDentries {
+		if data, err = json.Marshal(dentry); err != nil {
+			return
+		}
+		// set length
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+		if _, err = fp.Write(lenBuf); err != nil {
+			return
+		}
+		if _, err = sign.Write(lenBuf); err != nil {
+			return
+		}
+		// set body
+		if _, err = fp.Write(data); err != nil {
+			return
+		}
+		if _, err = sign.Write(data); err != nil {
+			return
+		}
+
+	}
+	crc = sign.Sum32()
+
+	log.LogInfof("storeDeletedDentry: store complete: partitoinID(%v) volume(%v) numDeletedDentries(%v) crc(%v)",
+		mp.config.PartitionId, mp.config.VolName, len(sm.deletedDentries), crc)
+
+	return
+}
+
+func (mp *metaPartition) loadDeletedDentries(rootDir string, crc uint32) (err error) {
+	var numDeletedDentries uint64
+	defer func() {
+		if err == nil {
+			log.LogInfof("loadDeletedDentry: load complete: partitonID(%v) volume(%v) numDeletedDentries(%v)",
+				mp.config.PartitionId, mp.config.VolName, numDeletedDentries)
+		}
+	}()
+
+	filename := path.Join(rootDir, deletedDentryFile)
+	if _, err = os.Stat(filename); err != nil {
+		err = errors.NewErrorf("[loadDeletedDentries] Stat: %s", err.Error())
+		return
+	}
+	fp, err := os.OpenFile(filename, os.O_RDONLY, 0o644)
+	if err != nil {
+		err = errors.NewErrorf("[loadDeletedDentries] OpenFile: %s", err.Error())
+		return
+	}
+	defer fp.Close()
+	reader := bufio.NewReaderSize(fp, 4*1024)
+	ddentryBuf := make([]byte, 4)
+	crcCheck := crc32.NewIEEE()
+	for {
+		ddentryBuf = ddentryBuf[:4]
+		// 1. first read length
+		_, err = io.ReadFull(reader, ddentryBuf)
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+				if res := crcCheck.Sum32(); res != crc {
+					log.LogErrorf("[loadDeletedDentries]: check crc mismatch, expected[%d], actual[%d]", crc, res)
+					return ErrSnapshotCrcMismatch
+				}
+				return
+			}
+			err = errors.NewErrorf("[loadDeletedDentries] ReadHeader: %s", err.Error())
+			return
+		}
+		// length crc
+		if _, err = crcCheck.Write(ddentryBuf); err != nil {
+			return err
+		}
+
+		length := binary.BigEndian.Uint32(ddentryBuf)
+
+		// 2. next read body
+		if uint32(cap(ddentryBuf)) >= length {
+			ddentryBuf = ddentryBuf[:length]
+		} else {
+			ddentryBuf = make([]byte, length)
+		}
+		_, err = io.ReadFull(reader, ddentryBuf)
+		if err != nil {
+			err = errors.NewErrorf("[loadDeletedDentries] ReadBody: %s", err.Error())
+			return
+		}
+		d := &proto.DeletedDentryInfo{}
+		if err = json.Unmarshal(ddentryBuf, &d); err != nil {
+			err = errors.NewErrorf("[loadDeletedDentries] Unmarshal: %s", err.Error())
+			return
+		}
+		// data crc
+		if _, err = crcCheck.Write(ddentryBuf); err != nil {
+			return err
+		}
+
+		mp.fsmAppendDeletedDentry(d)
+		numDeletedDentries += 1
+	}
 }
 
 func (mp *metaPartition) renameStaleMetadata() (err error) {

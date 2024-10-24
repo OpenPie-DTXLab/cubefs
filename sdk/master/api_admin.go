@@ -324,6 +324,40 @@ func stdout(format string, a ...interface{}) {
 	_, _ = fmt.Fprintf(os.Stdout, format, a...)
 }
 
+func (api *AdminAPI) VolReplicationTargetAdd(vv *proto.SimpleVolView, sourceVolName, endpoint, region, accessKey, secretKey,
+	targetVolume, prefix string, optSync, secure bool) (id string, err error) {
+	request := newAPIRequest(http.MethodPost, proto.AdminVolReplicationTargetAdd)
+	request.addParam("sourceVolume", sourceVolName)
+	request.addParam("authKey", util.CalcAuthKey(vv.Owner))
+	request.addParam("endpoint", endpoint)
+	request.addParam("region", region)
+	request.addParam("accessKey", accessKey)
+	request.addParam("secretKey", secretKey)
+	request.addParam("targetVolume", targetVolume)
+	request.addParam("prefix", prefix)
+	request.addParam("sync", strconv.FormatBool(optSync))
+	request.addParam("secure", strconv.FormatBool(secure))
+	var resp []byte
+	if resp, err = api.mc.serveRequest(request); err != nil {
+		return
+	}
+	if err = json.Unmarshal(resp, &id); err != nil {
+		return
+	}
+
+	return
+}
+
+func (api *AdminAPI) VolReplicationTargetRemove(volume string, id string) (err error) {
+	request := newAPIRequest(http.MethodPost, proto.AdminVolReplicationTargetRemove)
+	request.addParam("sourceVolume", volume)
+	request.addParam("id", id)
+	if _, err = api.mc.serveRequest(request); err != nil {
+		return
+	}
+	return
+}
+
 func (api *AdminAPI) PutDataPartitions(volName string, dpsView []byte) (err error) {
 	return api.mc.request(newRequest(post, proto.AdminPutDataPartitions).
 		Header(api.h).addParam("name", volName).Body(dpsView))

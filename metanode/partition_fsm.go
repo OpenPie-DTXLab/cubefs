@@ -268,21 +268,22 @@ func (mp *metaPartition) Apply(command []byte, index uint64) (resp interface{}, 
 		uniqId := mp.GetUniqId()
 		uniqChecker := mp.uniqChecker.clone()
 		msg := &storeMsg{
-			command:        opFSMStoreTick,
-			applyIndex:     index,
-			txId:           txId,
-			inodeTree:      inodeTree,
-			dentryTree:     dentryTree,
-			extendTree:     extendTree,
-			multipartTree:  multipartTree,
-			txTree:         txTree,
-			txRbInodeTree:  txRbInodeTree,
-			txRbDentryTree: txRbDentryTree,
-			quotaRebuild:   quotaRebuild,
-			uidRebuild:     uidRebuild,
-			uniqId:         uniqId,
-			uniqChecker:    uniqChecker,
-			multiVerList:   mp.GetAllVerList(),
+			command:         opFSMStoreTick,
+			applyIndex:      index,
+			txId:            txId,
+			inodeTree:       inodeTree,
+			dentryTree:      dentryTree,
+			extendTree:      extendTree,
+			multipartTree:   multipartTree,
+			txTree:          txTree,
+			txRbInodeTree:   txRbInodeTree,
+			txRbDentryTree:  txRbDentryTree,
+			quotaRebuild:    quotaRebuild,
+			uidRebuild:      uidRebuild,
+			uniqId:          uniqId,
+			uniqChecker:     uniqChecker,
+			multiVerList:    mp.GetAllVerList(),
+			deletedDentries: mp.GetDeletedDentries(),
 		}
 		log.LogDebugf("opFSMStoreTick: quotaRebuild [%v] uidRebuild [%v]", quotaRebuild, uidRebuild)
 		mp.storeChan <- msg
@@ -472,6 +473,18 @@ func (mp *metaPartition) Apply(command []byte, index uint64) (resp interface{}, 
 			return
 		}
 		resp = mp.fsmSyncInodeAccessTime(ino)
+	case opFSMAppendDeletedDentry:
+		deletedDentry := &proto.DeletedDentryInfo{}
+		if err = json.Unmarshal(msg.V, deletedDentry); err != nil {
+			return
+		}
+		resp = mp.fsmAppendDeletedDentry(deletedDentry)
+	case opFSMRemoveDeletedDentry:
+		deletedDentry := &proto.DeletedDentryInfo{}
+		if err = json.Unmarshal(msg.V, deletedDentry); err != nil {
+			return
+		}
+		resp = mp.fsmRemoveDeletedDentry(deletedDentry)
 	}
 
 	return
@@ -716,19 +729,20 @@ func (mp *metaPartition) ApplySnapshot(peers []raftproto.Peer, iter raftproto.Sn
 			err = nil
 			// store message
 			mp.storeChan <- &storeMsg{
-				command:        opFSMStoreTick,
-				applyIndex:     mp.applyID,
-				txId:           mp.txProcessor.txManager.txIdAlloc.getTransactionID(),
-				inodeTree:      mp.inodeTree.GetTree(),
-				dentryTree:     mp.dentryTree.GetTree(),
-				extendTree:     mp.extendTree.GetTree(),
-				multipartTree:  mp.multipartTree.GetTree(),
-				txTree:         mp.txProcessor.txManager.txTree.GetTree(),
-				txRbInodeTree:  mp.txProcessor.txResource.txRbInodeTree.GetTree(),
-				txRbDentryTree: mp.txProcessor.txResource.txRbDentryTree.GetTree(),
-				uniqId:         mp.GetUniqId(),
-				uniqChecker:    uniqChecker.clone(),
-				multiVerList:   mp.GetVerList(),
+				command:         opFSMStoreTick,
+				applyIndex:      mp.applyID,
+				txId:            mp.txProcessor.txManager.txIdAlloc.getTransactionID(),
+				inodeTree:       mp.inodeTree.GetTree(),
+				dentryTree:      mp.dentryTree.GetTree(),
+				extendTree:      mp.extendTree.GetTree(),
+				multipartTree:   mp.multipartTree.GetTree(),
+				txTree:          mp.txProcessor.txManager.txTree.GetTree(),
+				txRbInodeTree:   mp.txProcessor.txResource.txRbInodeTree.GetTree(),
+				txRbDentryTree:  mp.txProcessor.txResource.txRbDentryTree.GetTree(),
+				uniqId:          mp.GetUniqId(),
+				uniqChecker:     uniqChecker.clone(),
+				multiVerList:    mp.GetVerList(),
+				deletedDentries: mp.GetDeletedDentries(),
 			}
 			select {
 			case mp.extReset <- struct{}{}:

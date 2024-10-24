@@ -328,6 +328,8 @@ type volValue struct {
 	Forbidden            bool
 	DpRepairBlockSize    uint64
 	EnableAutoMetaRepair bool
+
+	ReplicationTargets []*bsProto.ReplicationTarget
 }
 
 func (v *volValue) Bytes() (raw []byte, err error) {
@@ -399,6 +401,8 @@ func newVolValue(vol *Vol) (vv *volValue) {
 		EnableAutoMetaRepair:    vol.EnableAutoMetaRepair.Load(),
 		AccessTimeInterval:      vol.AccessTimeValidInterval,
 		EnablePersistAccessTime: vol.EnablePersistAccessTime,
+
+		ReplicationTargets: vol.replicationTargets,
 	}
 
 	return
@@ -760,6 +764,8 @@ func (c *Cluster) buildVolInfoRaftCmd(opType uint32, vol *Vol) (metadata *RaftCm
 	if metadata.V, err = json.Marshal(vv); err != nil {
 		return nil, errors.New(err.Error())
 	}
+	str := string(metadata.V)
+	log.LogInfof(str)
 	return
 }
 

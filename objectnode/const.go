@@ -46,6 +46,9 @@ const (
 	Origin             = "Origin"
 	UserAgent          = "User-Agent"
 
+	VolumeReplicationStatus            = "Volume-Replication-Status"
+	VolumeReplicationReplicaCreateTime = "Volume-Replication-Replica-Create-Time"
+
 	AccessControlRequestMethod    = "Access-Control-Request-Method"
 	AccessControlRequestHeaders   = "Access-Control-Request-Headers"
 	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
@@ -154,6 +157,8 @@ const (
 	XAttrKeyOSSLock         = "oss:lock"
 	XAttrKeyOSSCacheControl = "oss:cache"
 	XAttrKeyOSSExpires      = "oss:expires"
+	// XAttrKeyOSSPartSizes each part size of object that upload in parts
+	XAttrKeyOSSPartSizes = "oss:sizes"
 
 	// Deprecated
 	XAttrKeyOSSETagDeprecated = "oss:tag"

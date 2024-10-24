@@ -187,6 +187,9 @@ const (
 	opFSMVersionOp         = 74
 	opFSMExtentSplit       = 75
 	opFSMSentToChanWithVer = 76
+
+	opFSMAppendDeletedDentry = 77
+	opFSMRemoveDeletedDentry = 78
 )
 
 var exporterKey string

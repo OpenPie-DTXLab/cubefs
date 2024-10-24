@@ -21,6 +21,10 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/cubefs/cubefs/sdk/meta/vol_replication"
 	"hash"
 	"io"
 	"os"
@@ -148,6 +152,8 @@ type Volume struct {
 	closeCh   chan struct{}
 
 	onAsyncTaskError AsyncTaskErrorFunc
+
+	replicationStat *ReplicationState
 }
 
 func (v *Volume) GetOwner() string {
@@ -900,13 +906,20 @@ func (v *Volume) DeletePath(path string) (err error) {
 	log.LogInfof("DeletePath: delete: volume(%v) path(%v) inode(%v)", v.name, path, ino)
 
 	// delete dentry with condition when objectlock is open
+	var inoInfo *proto.InodeInfo
 	if objetLock != nil {
-		_, err = v.mw.DeleteWithCond_ll(parent, ino, name, mode.IsDir(), path)
+		inoInfo, err = v.mw.DeleteWithCond_ll(parent, ino, name, mode.IsDir(), path)
 	} else {
-		_, err = v.mw.Delete_ll(parent, name, mode.IsDir(), path)
+		inoInfo, err = v.mw.Delete_ll(parent, name, mode.IsDir(), path)
 	}
 	if err != nil {
 		return
+	}
+
+	if targetIds, _ := v.shouldObjectReplicated(path, ""); len(targetIds) > 0 {
+		if err = v.mw.AppendDeletedDentry(ino, path, inoInfo.CreateTime.Unix()); err != nil {
+			return
+		}
 	}
 
 	if err = v.ec.EvictStream(ino); err != nil {
@@ -922,6 +935,9 @@ func (v *Volume) DeletePath(path string) (err error) {
 	if err = v.mw.Evict(ino, path); err != nil {
 		log.LogWarnf("DeletePath Evict: path(%v) inode(%v)", path, ino)
 	}
+
+	v.tryReplicateDeletion(ino, parent, path, inoInfo.CreateTime.Unix())
+
 	err = nil
 	return
 }
@@ -983,6 +999,8 @@ func (v *Volume) InitMultipart(path string, opt *PutFileOption) (multipartID str
 		log.LogErrorf("InitMultipart: meta init multipart fail: path(%v) err(%v)", path, err)
 		return "", err
 	}
+	log.LogDebugf("InitMultipart: meta init multipart: volume(%v) path(%v) multipartID(%v) path(%v)",
+		v.name, path, multipartID, path)
 	return multipartID, nil
 }
 
@@ -1194,6 +1212,7 @@ func (v *Volume) CompleteMultipart(path, multipartID string, multipartInfo *prot
 	// merge complete extent keys
 	var size uint64
 	var fileOffset uint64
+	var partSizes []string
 	if proto.IsCold(v.volType) {
 		completeObjExtentKeys := make([]proto.ObjExtentKey, 0)
 		for _, part := range parts {
@@ -1209,6 +1228,7 @@ func (v *Volume) CompleteMultipart(path, multipartID string, multipartInfo *prot
 				completeObjExtentKeys = append(completeObjExtentKeys, ek)
 			}
 			size += part.Size
+			partSizes = append(partSizes, strconv.FormatUint(part.Size, 10))
 		}
 		if err = v.mw.AppendObjExtentKeys(completeInodeInfo.Inode, completeObjExtentKeys); err != nil {
 			log.LogErrorf("CompleteMultipart: meta append extent keys fail: volume(%v) path(%v) multipartID(%v) inode(%v) err(%v)",
@@ -1231,6 +1251,7 @@ func (v *Volume) CompleteMultipart(path, multipartID string, multipartInfo *prot
 				completeExtentKeys = append(completeExtentKeys, ek)
 			}
 			size += part.Size
+			partSizes = append(partSizes, strconv.FormatUint(part.Size, 10))
 		}
 		if err = v.mw.AppendExtentKeys(completeInodeInfo.Inode, completeExtentKeys); err != nil {
 			log.LogErrorf("CompleteMultipart: meta append extent keys fail: volume(%v) path(%v) multipartID(%v) inode(%v) err(%v)",
@@ -1274,6 +1295,8 @@ func (v *Volume) CompleteMultipart(path, multipartID string, multipartInfo *prot
 		},
 	}
 	attrs[XAttrKeyOSSETag] = etagValue.Encode()
+	attrs[XAttrKeyOSSPartSizes] = strings.Join(partSizes, ",")
+
 	// set user modified system metadata, self defined metadata and tag
 	extend := multipartInfo.Extend
 	if len(extend) > 0 {
@@ -2984,10 +3007,11 @@ func (v *Volume) copyFile(parentID uint64, newFileName string, sourceFileInode u
 func NewVolume(config *VolumeConfig) (*Volume, error) {
 	var err error
 	metaConfig := &meta.MetaConfig{
-		Volume:        config.Volume,
-		Masters:       config.Masters,
-		Authenticate:  false,
-		ValidateOwner: false,
+		Volume:                  config.Volume,
+		Masters:                 config.Masters,
+		Authenticate:            false,
+		ValidateOwner:           false,
+		FetchVolReplicationInfo: true,
 		OnAsyncTaskError: func(err error) {
 			config.OnAsyncTaskError.OnError(err)
 		},
@@ -3069,6 +3093,8 @@ func NewVolume(config *VolumeConfig) (*Volume, error) {
 		}
 		go v.syncOSSMeta()
 	}
+
+	v.replicationStat = NewReplicationState(v.closeCh, v)
 
 	return v, nil
 }
@@ -3185,4 +3211,121 @@ func (v *Volume) referenceExtentKey(oldInode, inode uint64) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func (v *Volume) tryReplicate(f *FSFileInfo) {
+	var (
+		err      error
+		attrInfo *proto.XAttrInfo
+	)
+
+	if attrInfo, err = v.mw.XAttrGetAll_ll(f.Inode); err != nil {
+		log.LogErrorf("tryReplicate: meta get xattr failed : volume(%v) path(%v) inode(%v) err(%v)", v.name, f.Path, f.Inode, err)
+		return
+	}
+	if targetIDs, sync := v.shouldObjectReplicated(f.Path, attrInfo.XAttrs[VolumeReplicationStatus]); len(targetIDs) > 0 {
+		if sync {
+			v.replicateObject(f.Path, f.Inode, uint64(f.Size), f.CreateTime.Unix(), attrInfo.XAttrs, targetIDs)
+		} else {
+			v.replicationStat.queueReplicaTask(ReplicateFileInfo{
+				Path:       f.Path,
+				Inode:      f.Inode,
+				CreateTime: f.CreateTime.Unix(),
+				Size:       uint64(f.Size),
+				TargetIds:  targetIDs,
+			})
+		}
+
+	}
+}
+
+func (v *Volume) shouldObjectReplicated(objPath string, replicaStatus string) (targetIds []string, sync bool) {
+	return v.mw.ShouldObjectReplicated(objPath, replicaStatus)
+}
+
+func (v *Volume) replicateObject(path string, inode, size uint64, createTime int64, metaData map[string]string, targetIDs []string) (err error) {
+	var w *meta.ReplicationWrapper
+	var out *s3.HeadObjectOutput
+
+	etagStr, exist := metaData[XAttrKeyOSSETag]
+	if !exist {
+		return fmt.Errorf("key XAttrKeyOSSETag doesn't exist")
+	}
+	etag := ParseETagValue(etagStr)
+
+	w, err = v.mw.GetClient(targetIDs[0])
+	if err != nil {
+		return err
+	}
+
+	out, err = w.Client.HeadObject(&s3.HeadObjectInput{
+		Bucket: aws.String(w.TargetConfig.TargetVolume),
+		Key:    aws.String(path),
+	})
+
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeNoSuchKey, "NotFound":
+			default:
+				return err
+			}
+		}
+	}
+
+	if _, exist = out.Metadata[VolumeReplicationReplicaCreateTime]; exist {
+		if existObjTime, err := strconv.ParseInt(*out.Metadata[VolumeReplicationReplicaCreateTime], 10, 64); err != nil {
+			return err
+		} else if existObjTime > createTime {
+			return fmt.Errorf("target volume has object: %v which create time (%v )is larger than the current one(%v) ", path, existObjTime, createTime)
+		}
+	}
+
+	reader, writer := io.Pipe()
+	go func() {
+		err = v.readFile(inode, size, path, writer, 0, size)
+		if err != nil {
+			log.LogErrorf("replicateObject: read srcObj err(%v): srcVol(%v) path(%v)",
+				err, v.name, path)
+		}
+		writer.CloseWithError(err)
+	}()
+
+	replicationStatus := vol_replication.Complete
+	metaData[VolumeReplicationReplicaCreateTime] = strconv.FormatInt(createTime, 10)
+	if etag.PartNum > 0 {
+		//  object was uploaded in parts
+		err = ReplicateMultiPartsObject(v.name, path, size, w, metaData, reader)
+	} else {
+		// object was uploaded in whole
+		err = ReplicateObject(v.name, path, size, etag.ETag(), w, metaData, reader)
+	}
+
+	if err != nil {
+		replicationStatus = vol_replication.Failed
+	}
+
+	// update object replication status form Pending to Complete/Failed
+	if updateErr := v.SetXAttr(path, VolumeReplicationStatus, []byte(replicationStatus.String()), false); updateErr != nil {
+		log.LogErrorf("failed update object[%v/%v]'s replication status to [%v] ", v.name, path, replicationStatus.String())
+		return updateErr
+	}
+
+	return err
+}
+
+func (v *Volume) tryReplicateDeletion(inode, parentIno uint64, path string, createTime int64) {
+	if targetIDs, sync := v.shouldObjectReplicated(path, ""); len(targetIDs) > 0 {
+		if sync {
+			ReplicateDeletion(v.mw, inode, v.name, path, targetIDs, createTime)
+		} else {
+			v.replicationStat.queueDeletionTask(DeletionInfo{
+				Path:      path,
+				ParentIno: parentIno,
+				Inode:     inode,
+				Time:      createTime,
+				TargetIds: targetIDs,
+			})
+		}
+	}
 }

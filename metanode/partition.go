@@ -232,6 +232,12 @@ type OpMultiVersion interface {
 	checkByMasterVerlist(mpVerList *proto.VolVersionInfoList, masterVerList *proto.VolVersionInfoList) (err error)
 }
 
+type OpDeletedDentries interface {
+	AppendDeletedDentry(req *proto.AppendDeletedEntryRequest, p *Packet) error
+	RemoveDeletedDentry(req *proto.RemoveDeletedEntryRequest, p *Packet) error
+	ListDeletedDentries(p *Packet) error
+}
+
 // OpMeta defines the interface for the metadata operations.
 type OpMeta interface {
 	OpInode
@@ -243,6 +249,7 @@ type OpMeta interface {
 	OpTransaction
 	OpQuota
 	OpMultiVersion
+	OpDeletedDentries
 }
 
 // OpPartition defines the interface for the partition operations.
@@ -488,13 +495,15 @@ type OpQuota interface {
 //	+-----+             +-------+
 type metaPartition struct {
 	config                  *MetaPartitionConfig
-	size                    uint64                // For partition all file size
-	applyID                 uint64                // Inode/Dentry max applyID, this index will be update after restoring from the dumped data.
-	storedApplyId           uint64                // update after store snapshot to disk
-	dentryTree              *BTree                // btree for dentries
-	inodeTree               *BTree                // btree for inodes
-	extendTree              *BTree                // btree for inode extend (XAttr) management
-	multipartTree           *BTree                // collection for multipart management
+	size                    uint64                              // For partition all file size
+	applyID                 uint64                              // Inode/Dentry max applyID, this index will be update after restoring from the dumped data.
+	storedApplyId           uint64                              // update after store snapshot to disk
+	dentryTree              *BTree                              // btree for dentries
+	inodeTree               *BTree                              // btree for inodes
+	extendTree              *BTree                              // btree for inode extend (XAttr) management
+	multipartTree           *BTree                              // collection for multipart management
+	deletedDentries         map[string]*proto.DeletedDentryInfo // deleted dentries that didn't be replicated, path -> dentry
+	deletedDentriesLock     sync.RWMutex
 	txProcessor             *TransactionProcessor // transction processor
 	raftPartition           raftstore.Partition
 	stopC                   chan bool
@@ -879,20 +888,21 @@ func (mp *metaPartition) getRaftPort() (heartbeat, replica int, err error) {
 // NewMetaPartition creates a new meta partition with the specified configuration.
 func NewMetaPartition(conf *MetaPartitionConfig, manager *metadataManager) MetaPartition {
 	mp := &metaPartition{
-		config:        conf,
-		dentryTree:    NewBtree(),
-		inodeTree:     NewBtree(),
-		extendTree:    NewBtree(),
-		multipartTree: NewBtree(),
-		stopC:         make(chan bool),
-		storeChan:     make(chan *storeMsg, 100),
-		freeList:      newFreeList(),
-		extDelCh:      make(chan []proto.ExtentKey, defaultDelExtentsCnt),
-		extReset:      make(chan struct{}),
-		vol:           NewVol(),
-		manager:       manager,
-		uniqChecker:   newUniqChecker(),
-		verSeq:        conf.VerSeq,
+		config:          conf,
+		dentryTree:      NewBtree(),
+		inodeTree:       NewBtree(),
+		extendTree:      NewBtree(),
+		multipartTree:   NewBtree(),
+		deletedDentries: make(map[string]*proto.DeletedDentryInfo),
+		stopC:           make(chan bool),
+		storeChan:       make(chan *storeMsg, 100),
+		freeList:        newFreeList(),
+		extDelCh:        make(chan []proto.ExtentKey, defaultDelExtentsCnt),
+		extReset:        make(chan struct{}),
+		vol:             NewVol(),
+		manager:         manager,
+		uniqChecker:     newUniqChecker(),
+		verSeq:          conf.VerSeq,
 		multiVersionList: &proto.VolVersionInfoList{
 			TemporaryVerMap: make(map[uint64]*proto.VolVersionInfo),
 		},
@@ -1017,6 +1027,7 @@ const (
 	CRC_COUNT_TX_STUFF   int = 7
 	CRC_COUNT_UINQ_STUFF int = 8
 	CRC_COUNT_MULTI_VER  int = 9
+	CRC_COUNT_DDentry    int = 10
 )
 
 func (mp *metaPartition) LoadSnapshot(snapshotPath string) (err error) {
@@ -1033,7 +1044,7 @@ func (mp *metaPartition) LoadSnapshot(snapshotPath string) (err error) {
 	}
 
 	crc_count := len(crcs)
-	if crc_count != CRC_COUNT_BASIC && crc_count != CRC_COUNT_TX_STUFF && crc_count != CRC_COUNT_UINQ_STUFF && crc_count != CRC_COUNT_MULTI_VER {
+	if crc_count != CRC_COUNT_BASIC && crc_count != CRC_COUNT_TX_STUFF && crc_count != CRC_COUNT_UINQ_STUFF && crc_count != CRC_COUNT_MULTI_VER && crc_count != CRC_COUNT_DDentry {
 		log.LogErrorf("action[LoadSnapshot] crc array length %d not match", len(crcs))
 		return ErrSnapshotCrcMismatch
 	}
@@ -1058,6 +1069,12 @@ func (mp *metaPartition) LoadSnapshot(snapshotPath string) (err error) {
 		}
 	} else {
 		mp.storeMultiVersion(snapshotPath, &storeMsg{multiVerList: mp.multiVersionList.VerList})
+	}
+
+	if crc_count == CRC_COUNT_DDentry {
+		if err = mp.loadDeletedDentries(snapshotPath, crcs[CRC_COUNT_DDentry-1]); err != nil {
+			return
+		}
 	}
 
 	errs := make([]error, len(loadFuncs))
@@ -1171,6 +1188,7 @@ func (mp *metaPartition) store(sm *storeMsg) (err error) {
 		mp.storeTxRbDentry,
 		mp.storeUniqChecker,
 		mp.storeMultiVersion,
+		mp.storeDeletedDentry,
 	}
 	for _, storeFunc := range storeFuncs {
 		var crc uint32
@@ -1707,18 +1725,19 @@ func (mp *metaPartition) initTxInfo(txInfo *proto.TransactionInfo) error {
 
 func (mp *metaPartition) storeSnapshotFiles() (err error) {
 	msg := &storeMsg{
-		applyIndex:     mp.applyID,
-		txId:           mp.txProcessor.txManager.txIdAlloc.getTransactionID(),
-		inodeTree:      NewBtree(),
-		dentryTree:     NewBtree(),
-		extendTree:     NewBtree(),
-		multipartTree:  NewBtree(),
-		txTree:         NewBtree(),
-		txRbInodeTree:  NewBtree(),
-		txRbDentryTree: NewBtree(),
-		uniqId:         mp.GetUniqId(),
-		uniqChecker:    newUniqChecker(),
-		multiVerList:   mp.multiVersionList.VerList,
+		applyIndex:      mp.applyID,
+		txId:            mp.txProcessor.txManager.txIdAlloc.getTransactionID(),
+		inodeTree:       NewBtree(),
+		dentryTree:      NewBtree(),
+		extendTree:      NewBtree(),
+		multipartTree:   NewBtree(),
+		txTree:          NewBtree(),
+		txRbInodeTree:   NewBtree(),
+		txRbDentryTree:  NewBtree(),
+		uniqId:          mp.GetUniqId(),
+		uniqChecker:     newUniqChecker(),
+		multiVerList:    mp.multiVersionList.VerList,
+		deletedDentries: mp.GetDeletedDentries(),
 	}
 
 	return mp.store(msg)

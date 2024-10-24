@@ -365,6 +365,13 @@ func (m *metadataManager) HandleMetadataOperation(conn net.Conn, p *Packet, remo
 		err = m.opMultiVersionOp(conn, p, remoteAddr)
 	case proto.OpGetExpiredMultipart:
 		err = m.opGetExpiredMultipart(conn, p, remoteAddr)
+	case proto.OpMetaAppendDeletedDentry:
+		err = m.opAppendDeletedDentry(conn, p, remoteAddr)
+	case proto.OpMetaRemoveDeletedDentry:
+		err = m.opRemoveDeletedDentry(conn, p, remoteAddr)
+	case proto.OpMetaListDeletedDentries:
+		err = m.opListDeletedDentries(conn, p, remoteAddr)
+
 	default:
 		err = fmt.Errorf("%s unknown Opcode: %d, reqId: %d", remoteAddr,
 			p.Opcode, p.GetReqID())
@@ -812,6 +819,69 @@ func (m *metadataManager) GetLeaderPartitions() map[uint64]MetaPartition {
 	}
 
 	return mps
+}
+
+func (m *metadataManager) opAppendDeletedDentry(conn net.Conn, p *Packet, addr string) (err error) {
+	req := &proto.AppendDeletedEntryRequest{}
+	if err = json.Unmarshal(p.Data, req); err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	mp, err := m.getPartition(req.PartitionID)
+	if err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	if !mp.IsFollowerRead() && !m.serveProxy(conn, mp, p) {
+		return
+	}
+	err = mp.AppendDeletedDentry(req, p)
+	_ = m.respondToClientWithVer(conn, p)
+	return
+}
+
+func (m *metadataManager) opRemoveDeletedDentry(conn net.Conn, p *Packet, addr string) (err error) {
+	req := &proto.RemoveDeletedEntryRequest{}
+	if err = json.Unmarshal(p.Data, req); err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	mp, err := m.getPartition(req.PartitionID)
+	if err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	if !mp.IsFollowerRead() && !m.serveProxy(conn, mp, p) {
+		return
+	}
+	err = mp.RemoveDeletedDentry(req, p)
+	_ = m.respondToClientWithVer(conn, p)
+	return
+}
+
+func (m *metadataManager) opListDeletedDentries(conn net.Conn, p *Packet, addr string) (err error) {
+	req := &proto.ListDeletedEntryRequest{}
+	if err = json.Unmarshal(p.Data, req); err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	mp, err := m.getPartition(req.PartitionID)
+	if err != nil {
+		p.PacketErrorWithBody(proto.OpErr, []byte(err.Error()))
+		m.respondToClientWithVer(conn, p)
+		return
+	}
+	if !mp.IsFollowerRead() && !m.serveProxy(conn, mp, p) {
+		return
+	}
+	err = mp.ListDeletedDentries(p)
+	_ = m.respondToClientWithVer(conn, p)
+	return
 }
 
 // NewMetadataManager returns a new metadata manager.

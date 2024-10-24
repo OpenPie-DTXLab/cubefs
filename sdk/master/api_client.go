@@ -80,10 +80,10 @@ func (api *ClientAPI) GetVolumeWithAuthnode(volName string, authKey string, toke
 	return
 }
 
-func (api *ClientAPI) GetVolumeStat(volName string) (info *proto.VolStatInfo, err error) {
+func (api *ClientAPI) GetVolumeStat(volName string, fetchVolReplicationInfo bool) (info *proto.VolStatInfo, err error) {
 	info = &proto.VolStatInfo{}
 	err = api.mc.requestWith(info, newRequest(get, proto.ClientVolStat).
-		Header(api.h).Param(anyParam{"name", volName}, anyParam{"version", proto.LFClient}))
+		Header(api.h).Param(anyParam{"name", volName}, anyParam{"version", proto.LFClient}, anyParam{"fetchVolReplicationInfo", fetchVolReplicationInfo}))
 	return
 }
 

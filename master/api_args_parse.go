@@ -248,6 +248,49 @@ func parseVolName(r *http.Request) (name string, err error) {
 	return
 }
 
+func parseVolReplicationAddParams(r *http.Request, authKey *string, replicationTarget *proto.ReplicationTarget) (err error) {
+	*authKey = r.FormValue("authKey")
+
+	replicationTarget.SourceVolume = r.FormValue("sourceVolume")
+	replicationTarget.TargetVolume = r.FormValue("targetVolume")
+	if !volNameRegexp.MatchString(replicationTarget.SourceVolume) {
+		err = errors.New("source vol name can only be number and letters")
+		return
+	}
+	if !volNameRegexp.MatchString(replicationTarget.TargetVolume) {
+		err = errors.New("target vol name can only be number and letters")
+		return
+	}
+
+	replicationTarget.Prefix = strings.TrimSuffix(strings.TrimPrefix(r.FormValue("prefix"), "/"), "/")
+	replicationTarget.Endpoint = r.FormValue("endpoint")
+	replicationTarget.Region = r.FormValue("region")
+	replicationTarget.AccessKey = r.FormValue("accessKey")
+	replicationTarget.SecretKey = r.FormValue("secretKey")
+
+	if replicationTarget.ReplicationSync, err = strconv.ParseBool(r.FormValue("sync")); err != nil {
+		err = fmt.Errorf("parse sync field error ! %v", err)
+	}
+	if replicationTarget.Secure, err = strconv.ParseBool(r.FormValue("secure")); err != nil {
+		err = fmt.Errorf("parse secure field error ! %v", err)
+	}
+
+	return
+}
+
+func parseVolReplicationRemoveParams(r *http.Request) (volume, id string, err error) {
+	if volume = r.FormValue("sourceVolume"); !volNameRegexp.MatchString(volume) {
+		err = errors.New("source vol name can only be number and letters")
+		return
+	}
+	if id = r.FormValue("id"); len(id) == 0 {
+		err = errors.New("replication target id must be specified")
+		return
+	}
+
+	return
+}
+
 func parseVolVerStrategy(r *http.Request) (strategy proto.VolumeVerStrategy, isForce bool, err error) {
 	var value string
 	if value = r.FormValue(enableKey); value == "" {
@@ -1566,7 +1609,7 @@ func extractClientIDKey(r *http.Request) (clientIDKey string, err error) {
 	return
 }
 
-func parseVolStatReq(r *http.Request) (name string, ver int, byMeta bool, err error) {
+func parseVolStatReq(r *http.Request) (name string, ver int, byMeta, fetchVolReplication bool, err error) {
 	if err = r.ParseForm(); err != nil {
 		return
 	}
@@ -1584,6 +1627,12 @@ func parseVolStatReq(r *http.Request) (name string, ver int, byMeta bool, err er
 	if err != nil {
 		return
 	}
+
+	fetchVolReplication, err = extractBoolWithDefault(r, "fetchVolReplicationInfo", false)
+	if err != nil {
+		return
+	}
+
 	return
 }
 

@@ -17,9 +17,11 @@ package master
 import (
 	"encoding/json"
 	"fmt"
+	uuid2 "github.com/google/uuid"
 	"math"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,6 +60,8 @@ type VolVarargs struct {
 	enableAutoDpMetaRepair  bool
 	accessTimeValidInterval int64
 	enablePersistAccessTime bool
+
+	replicationTargets []*proto.ReplicationTarget
 }
 
 type CacheSubItem struct {
@@ -157,6 +161,8 @@ type Vol struct {
 
 	mpsLock *mpsLockManager
 	volLock sync.RWMutex
+
+	replicationTargets []*proto.ReplicationTarget
 }
 
 func newVol(vv volValue) (vol *Vol) {
@@ -200,6 +206,8 @@ func newVol(vv volValue) (vol *Vol) {
 	vol.CacheLRUInterval = vv.CacheLRUInterval
 	vol.CacheRule = vv.CacheRule
 	vol.Status = vv.Status
+
+	vol.replicationTargets = vv.ReplicationTargets
 
 	limitQosVal := &qosArgs{
 		qosEnable:     vv.VolQosEnable,
@@ -1639,6 +1647,8 @@ func setVolFromArgs(args *VolVarargs, vol *Vol) {
 	vol.AccessTimeInterval = args.accessTimeInterval
 	vol.EnableAutoMetaRepair.Store(args.enableAutoDpMetaRepair)
 	vol.EnablePersistAccessTime = args.enablePersistAccessTime
+
+	vol.replicationTargets = args.replicationTargets
 }
 
 func getVolVarargs(vol *Vol) *VolVarargs {
@@ -1681,6 +1691,7 @@ func getVolVarargs(vol *Vol) *VolVarargs {
 		trashInterval:           vol.TrashInterval,
 		enablePersistAccessTime: vol.EnablePersistAccessTime,
 		enableAutoDpMetaRepair:  vol.EnableAutoMetaRepair.Load(),
+		replicationTargets:      vol.replicationTargets,
 	}
 }
 
@@ -1749,5 +1760,50 @@ func (vol *Vol) checkDataReplicaMeta(c *Cluster) (cnt int) {
 	if len(checkMetaDp) != 0 {
 		checkMetaDpWg.Wait()
 	}
+	return
+}
+
+func (vol *Vol) getReplicationTargetID(target *proto.ReplicationTarget) (id string, err error) {
+	vol.volLock.RLock()
+	defer vol.volLock.RUnlock()
+
+	for _, existTarget := range vol.replicationTargets {
+		if existTarget.TargetVolume == target.TargetVolume &&
+			target.URL().String() == target.URL().String() &&
+			existTarget.AccessKey == target.AccessKey {
+
+			if existTarget.Prefix == target.Prefix {
+				return existTarget.ID, fmt.Errorf("target already exist, id: %s", existTarget.ID)
+			}
+			if strings.HasPrefix(existTarget.Prefix, target.Prefix) || strings.HasPrefix(target.Prefix, existTarget.Prefix) {
+				return existTarget.ID, fmt.Errorf("bad bucket prefix which interact target(%s) which has a prefix %s", existTarget.ID, existTarget.Prefix)
+			}
+
+		}
+
+	}
+	u, _ := uuid2.NewUUID()
+	return u.String(), nil
+}
+
+func (vol *Vol) removeReplicationTarget(id string) (err error) {
+	vol.volLock.Lock()
+	defer vol.volLock.Unlock()
+
+	var newTargets []*proto.ReplicationTarget
+	exist := false
+	for _, target := range vol.replicationTargets {
+		if target.ID == id {
+			exist = true
+			continue
+		}
+		newTargets = append(newTargets, target)
+	}
+
+	if !exist {
+		return errors.New("replication target " + id + " didn't exist")
+	}
+
+	vol.replicationTargets = newTargets
 	return
 }

@@ -177,6 +177,7 @@ const (
 	ErrCodeZoneNumError
 	ErrCodeVersionOpError
 	ErrCodeNodeSetNotExists
+	ErrCodeBadReplicationTarget
 )
 
 // Err2CodeMap error map to code

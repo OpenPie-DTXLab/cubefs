@@ -672,6 +672,32 @@ type AppendExtentKeyWithCheckRequest struct {
 	IsSplit        bool
 }
 
+type DeletedDentryInfo struct {
+	PartitionID uint64 `json:"pid"`
+	Inode       uint64 `json:"ino"`
+	Path        string `json:"path"`
+	Time        int64  `json:"time"`
+}
+
+type AppendDeletedEntryRequest struct {
+	PartitionID uint64 `json:"pid"`
+	Inode       uint64 `json:"ino"`
+	Path        string `json:"path"`
+	Time        int64  `json:"time"`
+}
+
+type RemoveDeletedEntryRequest struct {
+	PartitionID uint64 `json:"pid"`
+	Path        string `json:"path"`
+}
+
+type ListDeletedEntryRequest struct {
+	PartitionID uint64 `json:"pid"`
+}
+type ListDeletedEntryResponse struct {
+	DeletedDentries []*DeletedDentryInfo `json:"children"`
+}
+
 // AppendObjExtentKeyRequest defines the request to append an obj extent key.
 type AppendObjExtentKeysRequest struct {
 	VolName     string         `json:"vol"`

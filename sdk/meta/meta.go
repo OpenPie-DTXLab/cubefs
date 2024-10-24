@@ -15,7 +15,13 @@
 package meta
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+	"github.com/cubefs/cubefs/sdk/meta/vol_replication"
+	"github.com/cubefs/cubefs/util/exporter"
+	"github.com/cubefs/cubefs/util/s3"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,6 +44,7 @@ import (
 const (
 	HostsSeparator                = ","
 	RefreshMetaPartitionsInterval = time.Minute * 5
+	RefreshVolStatInterval        = time.Second * 15
 )
 
 const (
@@ -99,7 +106,8 @@ type MetaConfig struct {
 	TrashTraverseLimit         int
 	TrashRebuildGoroutineLimit int
 
-	VerReadSeq uint64
+	VerReadSeq              uint64
+	FetchVolReplicationInfo bool
 }
 
 type MetaWrapper struct {
@@ -184,6 +192,11 @@ type MetaWrapper struct {
 	LastVerSeq        uint64
 	Client            wrapper.SimpleClientInfo
 	IsSnapshotEnabled bool
+
+	replicationTargets map[string]*ReplicationWrapper
+	rtLock             sync.RWMutex
+
+	fetchVolReplicationInfo bool
 }
 
 type uniqidRange struct {
@@ -246,6 +259,9 @@ func NewMetaWrapper(config *MetaConfig) (*MetaWrapper, error) {
 	mw.dirCache = make(map[uint64]dirInfoCache)
 	mw.subDir = config.SubDir
 	limit := MaxMountRetryLimit
+	mw.fetchVolReplicationInfo = config.FetchVolReplicationInfo
+
+	mw.replicationTargets = make(map[string]*ReplicationWrapper, 0)
 
 	for limit > 0 {
 		err = mw.initMetaWrapper()
@@ -440,4 +456,260 @@ func statusToErrno(status int) error {
 	default:
 	}
 	return syscall.EIO
+}
+
+func (mw *MetaWrapper) GetClient(id string) (w *ReplicationWrapper, err error) {
+	mw.rtLock.RLock()
+	mw.rtLock.RUnlock()
+
+	if _, exist := mw.replicationTargets[id]; exist {
+		return mw.replicationTargets[id], nil
+	}
+
+	return nil, fmt.Errorf("replication tartet [%s] did not find ! ", id)
+}
+
+func (mw *MetaWrapper) updateReplicationTargets(targets []byte) {
+	var (
+		err             error
+		newTargets      []proto.ReplicationTarget
+		newTargetsID    map[string]struct{}
+		deleteTargetsID []string
+	)
+
+	newTargetsID = make(map[string]struct{})
+	if targets != nil && len(targets) > 0 {
+		if err = json.Unmarshal(targets, &newTargets); err != nil {
+			return
+		}
+	}
+
+	mw.rtLock.Lock()
+	defer mw.rtLock.Unlock()
+
+	for _, target := range newTargets {
+		newTargetsID[target.ID] = struct{}{}
+		if _, exist := mw.replicationTargets[target.ID]; !exist {
+			// add new target
+			client := s3.CreateReplicationTargetClient(
+				target.Endpoint, target.AccessKey,
+				target.SecretKey, target.Secure, target.Region)
+
+			_, err = client.HeadBucket(&awss3.HeadBucketInput{
+				Bucket: aws.String(target.TargetVolume),
+			})
+
+			if err != nil {
+				log.LogWarnf("vol %s replication may unreachable !", mw.volname)
+			}
+
+			mw.replicationTargets[target.ID] = &ReplicationWrapper{Client: client, TargetConfig: target}
+		} else {
+			// update exist target
+			updateTarget(mw.replicationTargets[target.ID], target)
+		}
+	}
+
+	for _, w := range mw.replicationTargets {
+		if _, exist := newTargetsID[w.TargetConfig.ID]; !exist {
+			deleteTargetsID = append(deleteTargetsID, w.TargetConfig.ID)
+		}
+	}
+
+	// remove targets
+	for _, targetID := range deleteTargetsID {
+		delete(mw.replicationTargets, targetID)
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) ShouldObjectReplicated(path, replicationStatus string) (satisfiedIDS []string, sync bool) {
+	if replicationStatus != "" &&
+		replicationStatus != vol_replication.Failed.String() &&
+		replicationStatus != vol_replication.Pending.String() {
+		return
+	}
+
+	mw.rtLock.RLock()
+	defer mw.rtLock.RUnlock()
+	for id, w := range mw.replicationTargets {
+		if !strings.HasPrefix(path, w.TargetConfig.Prefix) {
+			continue
+		}
+
+		satisfiedIDS = append(satisfiedIDS, id)
+		if w.TargetConfig.ReplicationSync {
+			sync = true
+		}
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) GetPrefixes() (prefixes []string) {
+	mw.rtLock.RLock()
+	defer mw.rtLock.RUnlock()
+
+	for _, w := range mw.replicationTargets {
+		prefixes = append(prefixes, w.TargetConfig.Prefix)
+	}
+	return
+}
+
+func (mw *MetaWrapper) AppendDeletedDentry(ino uint64, path string, t int64) (err error) {
+	mp := mw.getPartitionByInode(ino)
+	if mp == nil {
+		return syscall.ENOENT
+	}
+
+	req := &proto.AppendDeletedEntryRequest{
+		PartitionID: mp.PartitionID,
+		Inode:       ino,
+		Path:        path,
+		Time:        t,
+	}
+
+	packet := proto.NewPacketReqID()
+	packet.Opcode = proto.OpMetaAppendDeletedDentry
+	packet.PartitionID = mp.PartitionID
+	err = packet.MarshalData(req)
+	if err != nil {
+		log.LogErrorf("AppendDeletedDentry: req(%v) err(%v)", *req, err)
+		return
+	}
+
+	metric := exporter.NewTPCnt(packet.GetOpMsg())
+	defer func() {
+		metric.SetWithLabels(err, map[string]string{exporter.Vol: mw.volname})
+	}()
+
+	packet, err = mw.sendToMetaPartition(mp, packet)
+	if err != nil {
+		log.LogErrorf("AppendDeletedDentry: packet(%v) mp(%v) req(%v) err(%v)", packet, mp, *req, err)
+		return
+	}
+
+	status := parseStatus(packet.ResultCode)
+	if status != statusOK {
+		err = errors.New(packet.GetResultMsg())
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) RemoveDeletedDentry(ino uint64, path string) (err error) {
+	mp := mw.getPartitionByInode(ino)
+	if mp == nil {
+		return syscall.ENOENT
+	}
+
+	req := &proto.RemoveDeletedEntryRequest{
+		PartitionID: mp.PartitionID,
+		Path:        path,
+	}
+
+	packet := proto.NewPacketReqID()
+	packet.Opcode = proto.OpMetaRemoveDeletedDentry
+	packet.PartitionID = mp.PartitionID
+	err = packet.MarshalData(req)
+	if err != nil {
+		log.LogErrorf("RemoveDeletedDentry: req(%v) err(%v)", *req, err)
+		return
+	}
+
+	metric := exporter.NewTPCnt(packet.GetOpMsg())
+	defer func() {
+		metric.SetWithLabels(err, map[string]string{exporter.Vol: mw.volname})
+	}()
+
+	packet, err = mw.sendToMetaPartition(mp, packet)
+	if err != nil {
+		log.LogErrorf("AppendDeletedDentry: packet(%v) mp(%v) req(%v) err(%v)", packet, mp, *req, err)
+		return
+	}
+
+	status := parseStatus(packet.ResultCode)
+	if status != statusOK {
+		err = errors.New(packet.GetResultMsg())
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) ListAllDeletedDentries() (result []*proto.DeletedDentryInfo, err error) {
+	dentries := make([][]*proto.DeletedDentryInfo, len(mw.partitions))
+	errors := make([]error, len(mw.partitions))
+	var wg sync.WaitGroup
+	i := 0
+	for _, mp := range mw.partitions {
+		wg.Add(1)
+		go func(mp *MetaPartition) {
+			defer wg.Done()
+			partitionDentries, err := mw.listDeletedDentries(mp)
+			if err != nil {
+				log.LogErrorf("listDeletedDentries fail when list partition %v: partitionId(%v)", mp.PartitionID)
+				errors[i] = err
+				return
+			}
+
+			dentries[i] = partitionDentries
+			i++
+		}(mp)
+	}
+	wg.Wait()
+
+	for _, partitionDentries := range dentries {
+		result = append(result, partitionDentries...)
+	}
+
+	for _, e := range errors {
+		if e != nil {
+			err = e
+			return // failed
+		}
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) listDeletedDentries(mp *MetaPartition) (partitionDentries []*proto.DeletedDentryInfo, err error) {
+	req := &proto.ListDeletedEntryRequest{
+		PartitionID: mp.PartitionID,
+	}
+
+	packet := proto.NewPacketReqID()
+	packet.Opcode = proto.OpMetaListDeletedDentries
+	packet.PartitionID = mp.PartitionID
+	err = packet.MarshalData(req)
+	if err != nil {
+		log.LogErrorf("listDeletedDentries: req(%v) err(%v)", *req, err)
+		return
+	}
+
+	metric := exporter.NewTPCnt(packet.GetOpMsg())
+	defer func() {
+		metric.SetWithLabels(err, map[string]string{exporter.Vol: mw.volname})
+	}()
+
+	packet, err = mw.sendToMetaPartition(mp, packet)
+	if err != nil {
+		log.LogErrorf("listDeletedDentries: packet(%v) mp(%v) req(%v) err(%v)", packet, mp, *req, err)
+		return
+	}
+
+	status := parseStatus(packet.ResultCode)
+	if status != statusOK {
+		err = errors.New(packet.GetResultMsg())
+		return
+	}
+
+	resp := new(proto.ListDeletedEntryResponse)
+	err = packet.UnmarshalData(resp)
+	if err != nil {
+		log.LogErrorf("listDeletedDentries: packet(%v) mp(%v) err(%v) PacketData(%v)", packet, mp, err, string(packet.Data))
+		return
+	}
+	partitionDentries = resp.DeletedDentries
+	return
 }

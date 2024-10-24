@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"github.com/cubefs/cubefs/sdk/meta/vol_replication"
 	"io"
 	"net/http"
 	"net/url"
@@ -1368,6 +1369,10 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	log.LogInfof("Audit: put object: requestID(%v) remote(%v) volume(%v) path(%v) type(%v)",
 		GetRequestID(r), getRequestIP(r), vol.Name(), param.Object(), contentType)
 
+	if targetIds, _ := vol.shouldObjectReplicated(param.Object(), metadata[VolumeReplicationStatus]); len(targetIds) > 0 {
+		metadata[VolumeReplicationStatus] = vol_replication.Pending.String()
+	}
+
 	// Flow Control
 	var reader io.Reader
 	if length > DefaultFlowLimitSize {
@@ -1404,6 +1409,8 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		errorCode = BadDigest
 		return
 	}
+
+	vol.tryReplicate(fsFileInfo)
 
 	// set response header
 	w.Header()[ETag] = []string{wrapUnescapedQuot(fsFileInfo.ETag)}

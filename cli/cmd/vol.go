@@ -15,17 +15,23 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/cubefs/cubefs/objectnode"
+	"github.com/cubefs/cubefs/proto"
+	"github.com/cubefs/cubefs/sdk/master"
+	"github.com/cubefs/cubefs/util"
+	"github.com/cubefs/cubefs/util/print_util"
+	"github.com/cubefs/cubefs/util/strutil"
+	"github.com/spf13/cobra"
+	"net/url"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/cubefs/cubefs/proto"
-	"github.com/cubefs/cubefs/sdk/master"
-	"github.com/cubefs/cubefs/util"
-	"github.com/cubefs/cubefs/util/strutil"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -46,6 +52,7 @@ func newVolCmd(client *master.MasterClient) *cobra.Command {
 		newVolExpandCmd(client),
 		newVolShrinkCmd(client),
 		newVolUpdateCmd(client),
+		newVolReplicationCmd(client),
 		newVolInfoCmd(client),
 		newVolDeleteCmd(client),
 		newVolTransferCmd(client),
@@ -258,6 +265,309 @@ func newVolCreateCmd(client *master.MasterClient) *cobra.Command {
 	cmd.Flags().Int64Var(&optDeleteLockTime, CliFlagDeleteLockTime, 0, "Specify delete lock time[Unit: hour] for volume")
 
 	return cmd
+}
+
+const (
+	cmdVolReplicationUse   = "replication [COMMAND]"
+	cmdVolReplicationShort = "Manage Volume replication "
+)
+
+func newVolReplicationCmd(client *master.MasterClient) *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:     cmdVolReplicationUse,
+		Short:   cmdVolReplicationShort,
+		Args:    cobra.MinimumNArgs(0),
+		Aliases: []string{"replication"},
+	}
+	cmd.AddCommand(
+		newVolReplicationAddCmd(client),
+		newVolReplicationListCmd(client),
+		newVolReplicationRemoveCmd(client),
+		newVolReplicationHealCmd(client),
+	)
+	return cmd
+}
+
+const (
+	cmdVolReplicationAddUse   = "add [source bucket]"
+	cmdVolReplicationAddShort = "add Volume replication rule"
+)
+
+func newVolReplicationAddCmd(client *master.MasterClient) *cobra.Command {
+	var optTargetBucket string
+	var optPrefix string
+	var optRegion string
+	var optSync bool
+	var cmd = &cobra.Command{
+		Use:   cmdVolReplicationAddUse,
+		Short: cmdVolReplicationAddShort,
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			var err error
+
+			var id string
+			var endpoint string
+			var accessKey string
+			var secretKey string
+			var targetVolume string
+			var secure bool
+			//var Arn                  string
+			var sourceVolName = args[0]
+			var vv *proto.SimpleVolView
+			if vv, err = client.AdminAPI().GetVolumeSimpleInfo(sourceVolName); err != nil {
+				return
+			}
+
+			accessKey, secretKey, targetVolume, endpoint, secure, err = parseTargetParams(optTargetBucket)
+			if err != nil {
+				errout(err)
+				return
+			}
+
+			if len(optRegion) == 0 {
+				errout(fmt.Errorf("region must be specified"))
+				return
+			}
+
+			if id, err = client.AdminAPI().VolReplicationTargetAdd(vv, sourceVolName, endpoint, optRegion, accessKey, secretKey, targetVolume, optPrefix, optSync, secure); err != nil {
+				errout(err)
+				return
+			}
+
+			stdout("id = %v\n", id)
+		},
+	}
+
+	cmd.Flags().StringVar(&optTargetBucket, "target-bucket", "", "Specify target bucket which the data will be replicated to")
+	cmd.Flags().StringVar(&optRegion, "region", "", "Specify region the bucket located at")
+	cmd.Flags().StringVar(&optPrefix, "prefix", "", "Specify the prefix the object path start with which should to be replicated")
+	cmd.Flags().BoolVar(&optSync, "sync", false, "Replication synchronize or not, default false")
+	return cmd
+}
+
+const (
+	cmdVolReplicationListUse   = "list [source bucket]"
+	cmdVolReplicationListShort = "show  Volume replication targets info"
+)
+
+func newVolReplicationListCmd(client *master.MasterClient) *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:   cmdVolReplicationListUse,
+		Short: cmdVolReplicationListShort,
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			var err error
+			var targets []proto.ReplicationTarget
+			var sourceVolName = args[0]
+			var vv *proto.SimpleVolView
+			if vv, err = client.AdminAPI().GetVolumeSimpleInfo(sourceVolName); err != nil {
+				errout(err)
+				return
+			}
+
+			if vv.ReplicationTargets == nil || len(vv.ReplicationTargets) == 0 {
+				return
+			}
+			if err = json.Unmarshal(vv.ReplicationTargets, &targets); err != nil {
+				errout(err)
+				return
+			}
+
+			stdout(replicationTargetListStr(targets))
+		},
+	}
+	return cmd
+}
+
+func replicationTargetListStr(targets []proto.ReplicationTarget) string {
+	sb := strings.Builder{}
+	for _, target := range targets {
+		sb.WriteString(fmt.Sprintf("  ID           : %v\n", target.ID))
+		sb.WriteString(fmt.Sprintf("  Endpoint     : %v\n", target.Endpoint))
+		sb.WriteString(fmt.Sprintf("  Region       : %v\n", target.Region))
+		sb.WriteString(fmt.Sprintf("  TargetVolume : %v\n", target.TargetVolume))
+		sb.WriteString(fmt.Sprintf("  Prefix       : %v\n", target.Prefix))
+
+		sb.WriteString(fmt.Sprintf("  AccessKey    : %v\n", target.AccessKey))
+		sb.WriteString(fmt.Sprintf("  SecretKey    : %v\n", target.SecretKey))
+		sb.WriteString(fmt.Sprintf("  Sync         : %v\n", target.ReplicationSync))
+		sb.WriteString(fmt.Sprintf("  Status       : %v\n", "enabled"))
+		sb.WriteString(fmt.Sprintf("\n"))
+	}
+
+	return sb.String()
+}
+
+const (
+	cmdVolReplicationRemoveUse   = "remove [source bucket]"
+	cmdVolReplicationRemoveShort = "Remove the specified Volume replication target"
+)
+
+func newVolReplicationRemoveCmd(client *master.MasterClient) *cobra.Command {
+	var targetID string
+	var cmd = &cobra.Command{
+		Use:   cmdVolReplicationRemoveUse,
+		Short: cmdVolReplicationRemoveShort,
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			var err error
+			var sourceVolName = args[0]
+
+			if len(targetID) == 0 {
+				errout(errors.New("target Id must be specified! "))
+				return
+			}
+			if err = client.AdminAPI().VolReplicationTargetRemove(sourceVolName, targetID); err != nil {
+				errout(err)
+				return
+			}
+			stdout(targetID + " deleted successfully\n")
+
+		},
+	}
+
+	cmd.Flags().StringVar(&targetID, "targetId", "", "Id of replication target need to be deleted")
+	return cmd
+}
+
+const (
+	cmdVolReplicationCheckUse   = "heal [source bucket]"
+	cmdVolReplicationCheckShort = "heal object failed to replicate in the bucket"
+)
+
+func newVolReplicationHealCmd(client *master.MasterClient) *cobra.Command {
+	var firstPrint bool
+	var dryRun bool
+
+	var cmd = &cobra.Command{
+		Use:   cmdVolReplicationCheckUse,
+		Short: cmdVolReplicationCheckShort,
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			var err error
+			var sourceVolName = args[0]
+
+			var vv *proto.SimpleVolView
+			if vv, err = client.AdminAPI().GetVolumeSimpleInfo(sourceVolName); err != nil {
+				errout(err)
+				return
+			}
+
+			if vv.ReplicationTargets == nil || len(vv.ReplicationTargets) == 0 {
+				errout(errors.New("no replication target configured of this volume "))
+				return
+			}
+
+			currStatC := make(chan proto.ScanStatistics, 100)
+			stopC := make(chan bool)
+			task, err := objectnode.NewReplicationCheckTask(client.GetMasterAddresses(), sourceVolName, dryRun, currStatC, stopC)
+			if err != nil {
+				errout(err)
+				return
+			}
+			if err = task.Start(); err != nil {
+				errout(err)
+				return
+			}
+
+			// wait for completion
+			firstPrint = true
+			for {
+				select {
+				case stat := <-currStatC:
+					printHealProgress(stat, firstPrint)
+					firstPrint = false
+					if stat.Done {
+						stopC <- true
+						printHealProgress(stat, firstPrint)
+						return
+					}
+				}
+			}
+
+		},
+	}
+
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "", false, "Answer yes for all questions")
+
+	return cmd
+}
+
+func printHealProgress(stat proto.ScanStatistics, firstPrint bool) {
+	type printStat struct {
+		DirScannedNum         int64 `table:"dir scanned"`
+		FileScannedNum        int64 `table:"file scanned"`
+		FailedObjectsDetected int64 `table:"file replication failed"`
+		FailedObjectsHealed   int64 `table:"file replication healed"`
+
+		FailedDeletion       int64 `table:"deletion replication failed"`
+		FailedDeletionHealed int64 `table:"deletion replication healed"`
+	}
+
+	if !firstPrint {
+		RewindLines(5)
+	}
+	print_util.OutputA([]printStat{{
+		DirScannedNum:         stat.DirScannedNum,
+		FileScannedNum:        stat.FileScannedNum,
+		FailedObjectsDetected: stat.FailedObjectsDetected,
+		FailedObjectsHealed:   stat.FailedObjectsHealed,
+		FailedDeletion:        stat.FailedDeletion,
+		FailedDeletionHealed:  stat.FailedDeletionHealed,
+	}})
+}
+
+// RewindLines - uses terminal escape symbols to clear and rewind  upwards on the console for `n` lines.
+func RewindLines(n int) {
+	for i := 0; i < n; i++ {
+		fmt.Printf("\033[1A\033[K")
+	}
+}
+
+var (
+	hostKeys = regexp.MustCompile("^(https?://)(.*?):(.*)@(.*?)$")
+)
+
+func parseTargetParams(targetBucketStr string) (accessKey, secretKey, targetBucket, endpoint string, secure bool, err error) {
+	var parsedURL string
+	if !strings.HasPrefix(targetBucketStr, "http://") && !strings.HasPrefix(targetBucketStr, "https://") {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	if hostKeys.MatchString(targetBucketStr) {
+		parts := hostKeys.FindStringSubmatch(targetBucketStr)
+		if len(parts) != 5 {
+			err = fmt.Errorf("unsupported remote target format! ")
+			return
+		}
+		accessKey = parts[2]
+		secretKey = parts[3]
+		parsedURL = fmt.Sprintf("%s%s", parts[1], parts[4])
+	}
+
+	var e error
+	if parsedURL == "" {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+	var u *url.URL
+	u, e = url.Parse(parsedURL)
+	if e != nil {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	if len(u.Path) < 1 {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	secure = u.Scheme == "https"
+	targetBucket = path.Clean(u.Path[1:])
+	endpoint = u.Host
+
+	return
 }
 
 const (
