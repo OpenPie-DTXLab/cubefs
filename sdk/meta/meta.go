@@ -15,7 +15,12 @@
 package meta
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+	"github.com/cubefs/cubefs/master"
+	"github.com/cubefs/cubefs/util/s3"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +41,7 @@ import (
 const (
 	HostsSeparator                = ","
 	RefreshMetaPartitionsInterval = time.Minute * 5
+	RefreshVolStatInterval        = time.Second * 15
 )
 
 const (
@@ -173,6 +179,9 @@ type MetaWrapper struct {
 	dirCache             map[uint64]dirInfoCache
 	inoInfoLk            sync.RWMutex
 	subDir               string
+
+	replicationTargets map[string]*ReplicationWrapper
+	rtLock             sync.RWMutex
 }
 
 type uniqidRange struct {
@@ -235,6 +244,8 @@ func NewMetaWrapper(config *MetaConfig) (*MetaWrapper, error) {
 	mw.dirCache = make(map[uint64]dirInfoCache)
 	mw.subDir = config.SubDir
 	limit := MaxMountRetryLimit
+
+	mw.replicationTargets = make(map[string]*ReplicationWrapper, 0)
 
 	for limit > 0 {
 		err = mw.initMetaWrapper()
@@ -428,4 +439,95 @@ func statusToErrno(status int) error {
 	default:
 	}
 	return syscall.EIO
+}
+
+//func (mw *MetaWrapper) RTRLock(){
+//	mw.rtLock.RLock()
+//}
+//func (mw *MetaWrapper) RTRunLock(){
+//	mw.rtLock.RUnlock()
+//}
+//func (mw *MetaWrapper) RTLock(){
+//	mw.rtLock.Lock()
+//}
+//func (mw *MetaWrapper) RTunlock(){
+//	mw.rtLock.Unlock()
+//}
+
+func (mw *MetaWrapper) GetClient(id string) (w *ReplicationWrapper, err error) {
+	mw.rtLock.RLock()
+	mw.rtLock.RUnlock()
+
+	if _, exist := mw.replicationTargets[id]; exist {
+		return mw.replicationTargets[id], nil
+	}
+
+	return nil, fmt.Errorf("replication tartet [%s] did not find ! ", id)
+}
+
+func (mw *MetaWrapper) updateReplicationTargets(targets []byte) (err error) {
+	var (
+		newTargets      []master.ReplicationTarget
+		newTargetsID    map[string]struct{}
+		deleteTargetsID []string
+	)
+
+	if targets == nil || len(targets) == 0 {
+		return
+	}
+
+	mw.rtLock.Lock()
+	defer mw.rtLock.Unlock()
+
+	newTargetsID = make(map[string]struct{}, len(targets))
+	if err = json.Unmarshal(targets, &newTargets); err != nil {
+		return err
+	}
+
+	for _, target := range newTargets {
+		newTargetsID[target.ID] = struct{}{}
+		if _, exist := mw.replicationTargets[target.ID]; !exist {
+			// add new target
+			client := s3.CreateReplicationTargetClient(
+				target.Endpoint, target.AccessKey,
+				target.SecretKey, target.Secure)
+			_, err = client.HeadBucket(&awss3.HeadBucketInput{
+				Bucket: aws.String(target.TargetVolume),
+			})
+
+			if err != nil {
+				return
+			}
+
+			mw.replicationTargets[target.ID] = &ReplicationWrapper{Client: client, TargetConfig: target}
+		} else {
+			// update exist target
+			updateTarget(mw.replicationTargets[target.ID], target)
+		}
+	}
+
+	for _, w := range mw.replicationTargets {
+		if _, exist := newTargetsID[w.TargetConfig.ID]; !exist {
+			deleteTargetsID = append(deleteTargetsID, w.TargetConfig.ID)
+		}
+	}
+
+	// remove targets
+	for _, targetID := range deleteTargetsID {
+		delete(mw.replicationTargets, targetID)
+	}
+
+	return
+}
+
+func (mw *MetaWrapper) ShouldObjectReplicated(path string, metadata map[string]string) (satisfiedIDS []string) {
+	mw.rtLock.RLock()
+	mw.rtLock.RUnlock()
+
+	for id, _ := range mw.replicationTargets {
+		// TODO add more filter criteria
+		satisfiedIDS = append(satisfiedIDS, id)
+	}
+
+	return
 }

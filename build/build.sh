@@ -50,12 +50,17 @@ Version=$(git describe --abbrev=0 --tags 2>/dev/null)
 BranchName=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 CommitID=$(git rev-parse HEAD 2>/dev/null)
 BuildTime=$(date +%Y-%m-%d\ %H:%M)
+#LDFlags="-X 'github.com/cubefs/cubefs/proto.Version=${Version}' \
+#    -X 'github.com/cubefs/cubefs/proto.CommitID=${CommitID}' \
+#    -X 'github.com/cubefs/cubefs/proto.BranchName=${BranchName}' \
+#    -X 'github.com/cubefs/cubefs/proto.BuildTime=${BuildTime}' \
+#    -X 'github.com/cubefs/cubefs/blobstore/util/version.version=${BranchName}/${CommitID}' \
+#    -w -s"
 LDFlags="-X 'github.com/cubefs/cubefs/proto.Version=${Version}' \
     -X 'github.com/cubefs/cubefs/proto.CommitID=${CommitID}' \
     -X 'github.com/cubefs/cubefs/proto.BranchName=${BranchName}' \
     -X 'github.com/cubefs/cubefs/proto.BuildTime=${BuildTime}' \
-    -X 'github.com/cubefs/cubefs/blobstore/util/version.version=${BranchName}/${CommitID}' \
-    -w -s"
+    -X 'github.com/cubefs/cubefs/blobstore/util/version.version=${BranchName}/${CommitID}'"
 
 NPROC=$(nproc 2>/dev/null)
 if [ -e /sys/fs/cgroup/cpu ] ; then
@@ -275,7 +280,8 @@ run_test_cover() {
 build_server() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-server   "
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-server ${SrcPath}/cmd/*.go && echo "success" || echo "failed"
+    #CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-server ${SrcPath}/cmd/*.go && echo "success" || echo "failed"
+    CGO_ENABLED=1 go build ${MODFLAGS}   -gcflags "all=-N -l" -trimpath -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-server ${SrcPath}/cmd/*.go && echo "success" || echo "failed"
     popd >/dev/null
 }
 
@@ -313,7 +319,8 @@ build_blobstore() {
 build_client() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-client   "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-client ${SrcPath}/client/*.go  && echo "success" || echo "failed"
+    #CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-client ${SrcPath}/client/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags "all=-N -l" -trimpath -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-client ${SrcPath}/client/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 

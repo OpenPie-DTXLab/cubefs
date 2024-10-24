@@ -184,6 +184,11 @@ func (mw *MetaWrapper) updateVolStatInfo() (err error) {
 		}
 	}
 	log.LogInfof("VolStatInfo: info(%v), disableTrash(%v)", info, mw.disableTrash)
+
+	if err = mw.updateReplicationTargets(info.ReplicationTargets); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -257,31 +262,38 @@ func (mw *MetaWrapper) triggerAndWaitForceUpdate() {
 func (mw *MetaWrapper) refresh() {
 	var err error
 
-	t := time.NewTimer(RefreshMetaPartitionsInterval)
-	defer t.Stop()
+	metaPartitonTimer := time.NewTimer(RefreshMetaPartitionsInterval)
+	defer metaPartitonTimer.Stop()
+
+	volStatTimer := time.NewTimer(RefreshVolStatInterval)
+	defer volStatTimer.Stop()
 
 	for {
 		select {
-		case <-t.C:
+		case <-metaPartitonTimer.C:
 			if err = mw.updateMetaPartitions(); err != nil {
 				mw.onAsyncTaskError.OnError(err)
 				log.LogErrorf("updateMetaPartition fail cause: %v", err)
 			}
-			if err = mw.updateVolStatInfo(); err != nil {
-				mw.onAsyncTaskError.OnError(err)
-				log.LogErrorf("updateVolStatInfo fail cause: %v", err)
-			}
+
 			if err = mw.updateDirChildrenNumLimit(); err != nil {
 				mw.onAsyncTaskError.OnError(err)
 				log.LogErrorf("updateDirChildrenNumLimit fail cause: %v", err)
 			}
-			t.Reset(RefreshMetaPartitionsInterval)
+			metaPartitonTimer.Reset(RefreshMetaPartitionsInterval)
+		case <-volStatTimer.C:
+			if err = mw.updateVolStatInfo(); err != nil {
+				mw.onAsyncTaskError.OnError(err)
+				log.LogErrorf("updateVolStatInfo fail cause: %v", err)
+			}
+			volStatTimer.Reset(RefreshVolStatInterval)
 		case <-mw.forceUpdate:
 			log.LogInfof("Start forceUpdateMetaPartitions")
 			mw.partMutex.Lock()
 			if err = mw.forceUpdateMetaPartitions(); err == nil {
 				if err = mw.updateVolStatInfo(); err == nil {
-					t.Reset(RefreshMetaPartitionsInterval)
+					metaPartitonTimer.Reset(RefreshMetaPartitionsInterval)
+					metaPartitonTimer.Reset(RefreshVolStatInterval)
 				}
 			}
 			mw.partMutex.Unlock()

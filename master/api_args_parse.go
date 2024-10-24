@@ -234,6 +234,30 @@ func parseVolName(r *http.Request) (name string, err error) {
 	return
 }
 
+func parseVolReplicationAddParams(r *http.Request, authKey *string, replicationTarget *ReplicationTarget) (err error) {
+	*authKey = r.FormValue("authKey")
+
+	replicationTarget.SourceVolume = r.FormValue("sourceVolume")
+	replicationTarget.TargetVolume = r.FormValue("targetVolume")
+	if !volNameRegexp.MatchString(replicationTarget.SourceVolume) {
+		err = errors.New("source vol name can only be number and letters")
+		return
+	}
+	if !volNameRegexp.MatchString(replicationTarget.TargetVolume) {
+		err = errors.New("target vol name can only be number and letters")
+		return
+	}
+
+	replicationTarget.Endpoint = r.FormValue("endpoint")
+	replicationTarget.AccessKey = r.FormValue("accessKey")
+	replicationTarget.SecretKey = r.FormValue("secretKey")
+	if replicationTarget.Secure, err = strconv.ParseBool(r.FormValue("secure")); err != nil {
+		err = fmt.Errorf("parse secure field error ! %v", err)
+	}
+
+	return
+}
+
 func parseGetVolParameter(r *http.Request) (p *getVolParameter, err error) {
 	p = &getVolParameter{}
 	skipOwnerValidationVal := r.Header.Get(proto.SkipOwnerValidation)

@@ -331,6 +331,27 @@ func (api *AdminAPI) UpdateVolume(
 	return
 }
 
+func (api *AdminAPI) VolReplicationTargetAdd(vv *proto.SimpleVolView, sourceVolName, endpoint, accessKey, secretKey,
+	targetVolume string, secure bool) (id string, err error) {
+	request := newAPIRequest(http.MethodPost, proto.AdminVolReplicationTargetAdd)
+	request.addParam("sourceVolume", sourceVolName)
+	request.addParam("authKey", util.CalcAuthKey(vv.Owner))
+	request.addParam("endpoint", endpoint)
+	request.addParam("accessKey", accessKey)
+	request.addParam("secretKey", secretKey)
+	request.addParam("targetVolume", targetVolume)
+	request.addParam("secure", strconv.FormatBool(secure))
+	var resp []byte
+	if resp, err = api.mc.serveRequest(request); err != nil {
+		return
+	}
+	if err = json.Unmarshal(resp, &id); err != nil {
+		return
+	}
+
+	return
+}
+
 func (api *AdminAPI) PutDataPartitions(volName string, dpsView []byte) (err error) {
 	var request = newAPIRequest(http.MethodPost, proto.AdminPutDataPartitions)
 	request.addParam("name", volName)

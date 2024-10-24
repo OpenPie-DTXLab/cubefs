@@ -16,6 +16,9 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +49,7 @@ func newVolCmd(client *master.MasterClient) *cobra.Command {
 		newVolExpandCmd(client),
 		newVolShrinkCmd(client),
 		newVolUpdateCmd(client),
+		newVolReplicationCmd(client),
 		newVolInfoCmd(client),
 		newVolDeleteCmd(client),
 		newVolTransferCmd(client),
@@ -260,6 +264,123 @@ func newVolCreateCmd(client *master.MasterClient) *cobra.Command {
 	cmd.Flags().Int64Var(&optDeleteLockTime, CliFlagDeleteLockTime, 0, "Specify delete lock time[Unit: hour] for volume")
 
 	return cmd
+}
+
+const (
+	cmdVolReplicationUse   = "replication [COMMAND]"
+	cmdVolReplicationShort = "Manage Volume replication "
+)
+
+func newVolReplicationCmd(client *master.MasterClient) *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:     cmdVolReplicationUse,
+		Short:   cmdVolReplicationShort,
+		Args:    cobra.MinimumNArgs(0),
+		Aliases: []string{"replication"},
+	}
+	cmd.AddCommand(
+		newVolReplicationAddCmd(client),
+	)
+	return cmd
+}
+
+const (
+	cmdVolReplicationAddUse   = "add [source bucket]"
+	cmdVolReplicationAddShort = "add Volume replication rule"
+)
+
+func newVolReplicationAddCmd(client *master.MasterClient) *cobra.Command {
+	var optTargetBucket string
+	var cmd = &cobra.Command{
+		Use:   cmdVolReplicationAddUse,
+		Short: cmdVolReplicationAddShort,
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			var err error
+
+			var id string
+			var endpoint string
+			var accessKey string
+			var secretKey string
+			var targetVolume string
+			//var Region               string
+			var secure bool
+			//var Arn                  string
+			//var ReplicationSync      bool
+			var sourceVolName = args[0]
+			var vv *proto.SimpleVolView
+			if vv, err = client.AdminAPI().GetVolumeSimpleInfo(sourceVolName); err != nil {
+				return
+			}
+
+			defer func() {
+				if err != nil {
+					errout("Error: %v\n", err)
+				}
+			}()
+
+			accessKey, secretKey, targetVolume, endpoint, secure, err = parseTargetParams(optTargetBucket)
+			if err != nil {
+				errout("Error: %v\n", err)
+				return
+			}
+
+			if id, err = client.AdminAPI().VolReplicationTargetAdd(vv, sourceVolName, endpoint, accessKey, secretKey, targetVolume, secure); err != nil {
+				return
+			}
+
+			stdout("id = %v\n", id)
+		},
+	}
+
+	cmd.Flags().StringVar(&optTargetBucket, "target-bucket", "", "Specify target bucket which the data will be replicated to")
+	return cmd
+}
+
+var (
+	hostKeys = regexp.MustCompile("^(https?://)(.*?):(.*)@(.*?)$")
+)
+
+func parseTargetParams(targetBucketStr string) (accessKey, secretKey, targetBucket, endpoint string, secure bool, err error) {
+	var parsedURL string
+	if !strings.HasPrefix(targetBucketStr, "http://") && !strings.HasPrefix(targetBucketStr, "https://") {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	if hostKeys.MatchString(targetBucketStr) {
+		parts := hostKeys.FindStringSubmatch(targetBucketStr)
+		if len(parts) != 5 {
+			err = fmt.Errorf("unsupported remote target format! ")
+			return
+		}
+		accessKey = parts[2]
+		secretKey = parts[3]
+		parsedURL = fmt.Sprintf("%s%s", parts[1], parts[4])
+	}
+
+	var e error
+	if parsedURL == "" {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+	var u *url.URL
+	u, e = url.Parse(parsedURL)
+	if e != nil {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	if len(u.Path) < 1 {
+		err = fmt.Errorf("unsupported remote target format! ")
+		return
+	}
+
+	secure = u.Scheme == "https"
+	targetBucket = path.Clean(u.Path[1:])
+	endpoint = u.Host
+
+	return
 }
 
 const (

@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"hash"
 	"io"
 	"os"
@@ -3118,4 +3120,63 @@ func (v *Volume) referenceExtentKey(oldInode, inode uint64) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func (v *Volume) tryReplicate(f *FSFileInfo, opt *PutFileOption) {
+	var targetIDs []string
+	if targetIDs = v.shouldObjectReplicated(f, opt); len(targetIDs) > 0 {
+		v.replicateObject(f, targetIDs)
+	}
+}
+
+func (v *Volume) shouldObjectReplicated(f *FSFileInfo, opt *PutFileOption) []string {
+	return v.mw.ShouldObjectReplicated(f.Path, opt.Metadata)
+}
+
+func (v *Volume) replicateObject(f *FSFileInfo, targetIDs []string) {
+	var wg sync.WaitGroup
+	var w *meta.ReplicationWrapper
+
+	size, err := safeConvertInt64ToUint64(f.Size)
+	if err != nil {
+		return
+	}
+
+	for _, id := range targetIDs {
+		w, err = v.mw.GetClient(id)
+		if err != nil {
+			continue
+		}
+
+		wg.Add(1)
+		go func(w *meta.ReplicationWrapper) {
+			defer wg.Done()
+
+			reader, writer := io.Pipe()
+			go func() {
+				err = v.readFile(f.Inode, size, f.Path, writer, 0, size)
+				if err != nil {
+					log.LogErrorf("replicateObject: read srcObj err(%v): srcVol(%v) path(%v)",
+						err, v.name, f.Path)
+				}
+				writer.CloseWithError(err)
+			}()
+
+			_, err = w.Client.PutObject(&s3.PutObjectInput{
+				Bucket: aws.String(w.TargetConfig.TargetVolume),
+				Key:    aws.String(f.Path),
+				Body:   aws.ReadSeekCloser(reader),
+			})
+
+			// todo update object replication status metadata
+			if err == nil {
+				log.LogWarnf("object: %v/%v replicated to %v successfully", v.name, f.Path, id)
+			} else {
+				log.LogWarnf("object: %v/%v failed to replicate to %v ", v.name, f.Path, id)
+			}
+
+		}(w)
+	}
+	wg.Wait()
+
 }

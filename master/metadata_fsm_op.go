@@ -274,6 +274,8 @@ type volValue struct {
 	TrashInterval                                          int64
 	Forbidden                                              bool
 	DisableAuditLog                                        bool
+
+	ReplicationTargets []ReplicationTarget
 }
 
 func (v *volValue) Bytes() (raw []byte, err error) {
@@ -341,6 +343,8 @@ func newVolValue(vol *Vol) (vv *volValue) {
 		AuthKey:               vol.authKey,
 		DeleteExecTime:        vol.DeleteExecTime,
 		User:                  vol.user,
+
+		ReplicationTargets: vol.replicationTargets,
 	}
 
 	return
@@ -692,6 +696,8 @@ func (c *Cluster) buildVolInfoRaftCmd(opType uint32, vol *Vol) (metadata *RaftCm
 	if metadata.V, err = json.Marshal(vv); err != nil {
 		return nil, errors.New(err.Error())
 	}
+	str := string(metadata.V)
+	log.LogInfof(str)
 	return
 }
 

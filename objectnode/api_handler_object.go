@@ -1263,6 +1263,9 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		errorCode = BadDigest
 		return
 	}
+
+	vol.tryReplicate(fsFileInfo, opt)
+
 	log.LogDebugf("PutObject succeed, requestID(%v) volume(%v) key(%v) costTime: %v", GetRequestID(r),
 		vol.Name(), param.Object(), time.Since(startPut))
 

@@ -2895,6 +2895,7 @@ func (c *Cluster) updateVol(name, authKey string, newArgs *VolVarargs) (err erro
 		serverAuthKey string
 		volUsedSpace  uint64
 		oldArgs       *VolVarargs
+		targetNewAdd  ReplicationTarget
 	)
 
 	if vol, err = c.getVol(name); err != nil {
@@ -2932,6 +2933,14 @@ func (c *Cluster) updateVol(name, authKey string, newArgs *VolVarargs) (err erro
 	if newArgs.coldArgs.cacheCap >= newArgs.capacity {
 		err = fmt.Errorf("capacity must be large than cache capacity, newCap(%d), newCacheCap(%d)", newArgs.capacity, newArgs.coldArgs.cacheCap)
 		goto errHandler
+	}
+
+	targetNewAdd = newArgs.replicationTargets[len(newArgs.replicationTargets)-1:][0]
+	for _, t := range vol.replicationTargets {
+		if t.ID == targetNewAdd.ID {
+			err = fmt.Errorf("dumplicate replication target , ID %v", targetNewAdd.ID)
+			goto errHandler
+		}
 	}
 
 	oldArgs = getVolVarargs(vol)

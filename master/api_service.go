@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+	"github.com/cubefs/cubefs/util/s3"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -2080,6 +2083,59 @@ func (m *Server) updateVol(w http.ResponseWriter, r *http.Request) {
 		response = fmt.Sprintf("update vol[%v] successfully", req.name)
 	}
 	sendOkReply(w, r, newSuccessHTTPReply(response))
+}
+
+func (m *Server) volReplicationTargetAdd(w http.ResponseWriter, r *http.Request) {
+	var (
+		err               error
+		authKey           string
+		id                string
+		exists            bool
+		replicationTarget ReplicationTarget
+		vol               *Vol
+	)
+	metric := exporter.NewTPCnt(apiToMetricsName(proto.AdminVolReplicationTargetAdd))
+	defer func() {
+		doStatAndMetric(proto.AdminVolReplicationTargetAdd, metric, err, map[string]string{exporter.Vol: replicationTarget.SourceVolume})
+	}()
+
+	if err = parseVolReplicationAddParams(r, &authKey, &replicationTarget); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+
+	if vol, err = m.cluster.getVol(replicationTarget.SourceVolume); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeVolNotExists, Msg: err.Error()})
+		return
+	}
+
+	id, exists = vol.getReplicationTargetID(&replicationTarget)
+	if exists {
+		sendOkReply(w, r, newSuccessHTTPReply(id))
+		return
+	}
+	replicationTarget.ID = id
+
+	client := s3.CreateReplicationTargetClient(
+		replicationTarget.Endpoint, replicationTarget.AccessKey,
+		replicationTarget.SecretKey, replicationTarget.Secure)
+	_, err = client.HeadBucket(&awss3.HeadBucketInput{
+		Bucket: aws.String(replicationTarget.TargetVolume),
+	})
+
+	if err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+
+	newArgs := getVolVarargs(vol)
+	newArgs.replicationTargets = append(newArgs.replicationTargets, replicationTarget)
+	if err = m.cluster.updateVol(replicationTarget.SourceVolume, authKey, newArgs); err != nil {
+		sendErrReply(w, r, newErrHTTPReply(err))
+		return
+	}
+
+	sendOkReply(w, r, newSuccessHTTPReply(id))
 }
 
 func (m *Server) volExpand(w http.ResponseWriter, r *http.Request) {
@@ -4485,6 +4541,7 @@ func (m *Server) getVolStatInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func volStat(vol *Vol, countByMeta bool) (stat *proto.VolStatInfo) {
+	var err error
 	stat = new(proto.VolStatInfo)
 	stat.Name = vol.Name
 	stat.TotalSize = vol.Capacity * util.GB
@@ -4506,6 +4563,15 @@ func volStat(vol *Vol, countByMeta bool) (stat *proto.VolStatInfo) {
 	}
 	stat.TrashInterval = vol.TrashInterval
 	log.LogDebugf("total[%v],usedSize[%v] TrashInterval[%v]", stat.TotalSize, stat.UsedSize, stat.TrashInterval)
+
+	if len(vol.replicationTargets) > 0 {
+		var replicationTargetsData []byte
+		if replicationTargetsData, err = json.Marshal(vol.replicationTargets); err != nil {
+			log.LogWarnf("error when serialize replication target of vol [%v],err :%v", vol.Name, err.Error())
+		}
+		stat.ReplicationTargets = replicationTargetsData
+	}
+
 	if proto.IsHot(vol.VolType) {
 		return
 	}

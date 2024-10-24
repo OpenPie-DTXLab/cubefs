@@ -17,6 +17,7 @@ package master
 import (
 	"encoding/json"
 	"fmt"
+	uuid2 "github.com/google/uuid"
 	"math"
 	"strconv"
 	"sync"
@@ -50,6 +51,8 @@ type VolVarargs struct {
 	txOpLimit               int
 	trashInterval           int64
 	crossZone               bool
+
+	replicationTargets []ReplicationTarget
 }
 
 // Vol represents a set of meta partitionMap and data partitionMap
@@ -120,6 +123,8 @@ type Vol struct {
 	DeleteExecTime          time.Time
 	user                    *User
 	preloadCapacity         uint64
+
+	replicationTargets []ReplicationTarget
 }
 
 func newVol(vv volValue) (vol *Vol) {
@@ -167,6 +172,8 @@ func newVol(vv volValue) (vol *Vol) {
 	vol.CacheLRUInterval = vv.CacheLRUInterval
 	vol.CacheRule = vv.CacheRule
 	vol.Status = vv.Status
+
+	vol.replicationTargets = vv.ReplicationTargets
 
 	limitQosVal := &qosArgs{
 		qosEnable:     vv.VolQosEnable,
@@ -1410,6 +1417,7 @@ func setVolFromArgs(args *VolVarargs, vol *Vol) {
 	vol.dpSelectorName = args.dpSelectorName
 	vol.dpSelectorParm = args.dpSelectorParm
 	vol.TrashInterval = args.trashInterval
+	vol.replicationTargets = args.replicationTargets
 }
 
 func getVolVarargs(vol *Vol) *VolVarargs {
@@ -1446,6 +1454,7 @@ func getVolVarargs(vol *Vol) *VolVarargs {
 		txOpLimit:               vol.txOpLimit,
 		coldArgs:                args,
 		dpReadOnlyWhenVolFull:   vol.DpReadOnlyWhenVolFull,
+		replicationTargets:      vol.replicationTargets,
 	}
 }
 
@@ -1487,4 +1496,20 @@ func (vol *Vol) loadQuotaManager(c *Cluster) (err error) {
 	}
 
 	return err
+}
+
+func (vol *Vol) getReplicationTargetID(target *ReplicationTarget) (id string, exist bool) {
+	vol.volLock.RLock()
+	defer vol.volLock.RUnlock()
+
+	for _, existTarget := range vol.replicationTargets {
+		if existTarget.TargetVolume == target.TargetVolume &&
+			target.URL().String() == target.URL().String() &&
+			existTarget.AccessKey == target.AccessKey {
+			return existTarget.ID, true
+		}
+
+	}
+	u, _ := uuid2.NewUUID()
+	return u.String(), false
 }
