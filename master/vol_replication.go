@@ -4,28 +4,6 @@ import (
 	"net/url"
 )
 
-// StatusType of Replication for x-amz-replication-status header
-type StatusType string
-
-const (
-	// Pending - replication is pending.
-	Pending StatusType = "PENDING"
-
-	// Complete - replication completed ok.
-	Complete StatusType = "COMPLETE"
-
-	// Failed - replication failed.
-	Failed StatusType = "FAILED"
-
-	// Replica - this is a replica.
-	Replica StatusType = "REPLICA"
-)
-
-// String returns string representation of status
-func (s StatusType) String() string {
-	return string(s)
-}
-
 type ReplicationTarget struct {
 	ID              string `json:"id,omitempty"`
 	SourceVolume    string `json:"sourceVolume"`

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"github.com/cubefs/cubefs/sdk/meta/vol_replication"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -1232,6 +1233,10 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	log.LogInfof("Audit: put object: requestID(%v) remote(%v) volume(%v) path(%v) type(%v)",
 		GetRequestID(r), getRequestIP(r), vol.Name(), param.Object(), contentType)
 
+	if targetIds := vol.shouldObjectReplicated(param.Object(), metadata); len(targetIds) > 0 {
+		metadata[VolumeReplicationStatus] = vol_replication.Pending.String()
+	}
+
 	var fsFileInfo *FSFileInfo
 	var opt = &PutFileOption{
 		MIMEType:     contentType,
@@ -1264,7 +1269,7 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vol.tryReplicate(fsFileInfo, opt)
+	vol.tryReplicate(fsFileInfo)
 
 	log.LogDebugf("PutObject succeed, requestID(%v) volume(%v) key(%v) costTime: %v", GetRequestID(r),
 		vol.Name(), param.Object(), time.Since(startPut))

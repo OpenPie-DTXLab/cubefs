@@ -45,6 +45,8 @@ const (
 	Signature          = "Signature"
 	Origin             = "Origin"
 
+	VolumeReplicationStatus = "volume-replication-status"
+
 	AccessControlRequestMethod    = "Access-Control-Request-Method"
 	AccessControlRequestHeaders   = "Access-Control-Request-Headers"
 	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
@@ -148,6 +150,8 @@ const (
 	XAttrKeyOSSCORS         = "oss:cors"
 	XAttrKeyOSSCacheControl = "oss:cache"
 	XAttrKeyOSSExpires      = "oss:expires"
+	// XAttrKeyOSSPartSizes each part size of object that upload in parts
+	XAttrKeyOSSPartSizes = "oss:sizes"
 
 	// Deprecated
 	XAttrKeyOSSETagDeprecated = "oss:tag"
