@@ -1566,7 +1566,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", vol=\"$vol\"}[1m]) ) by (type))",
+          "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", vol=\"$vol\"}[1m]) ) by (type))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{type}}",
@@ -1650,8 +1650,8 @@
         "iotype": {
           "isNone": true,
           "selected": true,
-          "text": "None",
-          "value": ""
+          "text": "write",
+          "value": "write"
         }
       },
       "seriesOverrides": [
@@ -1665,7 +1665,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", vol=\"$vol\", type=\"$iotype\"}[1m]) ) by (instance, partid, type))",
+          "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", vol=\"$vol\", type=\"$iotype\"}[1m]) ) by (instance, partid, type))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{instance}}:{{partid}}",
@@ -2155,7 +2155,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (vol, type))",
+              "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (vol, type))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{vol}}:{{type}}",
@@ -2255,7 +2255,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (instance,type))",
+              "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (instance,type))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
@@ -2355,7 +2355,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (disk, instance))",
+              "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (disk, instance))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}:{{disk}}",
@@ -2455,7 +2455,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk($topk, sum(rate(cfs_dataNode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (instance, partid))",
+              "expr": "topk($topk, sum(rate(cfs_datanode_dataPartitionIOBytes{app=\"$app\", cluster=\"$cluster\", type=\"$iotype\"}[1m]) ) by (instance, partid))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}:{{partid}}",
@@ -6895,14 +6895,14 @@
           "value": ""
         },
         "datasource": "Prometheus",
-        "definition": "label_values(cfs_dataNode_dataPartitionIOBytes{app=\"$app\",cluster=\"$cluster\"}, type)",
+        "definition": "label_values(cfs_datanode_dataPartitionIOBytes{app=\"$app\",cluster=\"$cluster\"}, type)",
         "hide": 0,
         "includeAll": false,
         "label": "IOType",
         "multi": true,
         "name": "iotype",
         "options": [],
-        "query": "label_values(cfs_dataNode_dataPartitionIOBytes{app=\"$app\",cluster=\"$cluster\"}, type)",
+        "query": "label_values(cfs_datanode_dataPartitionIOBytes{app=\"$app\",cluster=\"$cluster\"}, type)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
