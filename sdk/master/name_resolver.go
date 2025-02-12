@@ -28,7 +28,7 @@ import (
 	"github.com/cubefs/cubefs/util/log"
 )
 
-var domainRegexp = regexp.MustCompile(`^(?i)[a-z0-9-]+(\.[a-z0-9-]+)+\.?$`)
+var domainRegexp = regexp.MustCompile(`^[a-z0-9-]+(\.[a-z0-9-]+)*\.?$`)
 
 func IsValidDomain(domain string) bool {
 	return domainRegexp.MatchString(domain)

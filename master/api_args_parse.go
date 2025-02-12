@@ -1054,9 +1054,15 @@ func extractNodeAddr(r *http.Request) (nodeAddr string, err error) {
 		err = keyNotFound(addrKey)
 		return
 	}
-	if ipAddr, ok := util.ParseAddrToIpAddr(nodeAddr); ok {
-		nodeAddr = ipAddr
+	if nodeIpAddr, nodeDomainAddr, ok := util.ParseAddrToIpAddr(nodeAddr); !ok {
+		err = fmt.Errorf("parse addr(%s) error", nodeAddr)
+	} else {
+		nodeAddr = nodeIpAddr
+		if len(nodeDomainAddr) > 0 {
+			nodeAddr = nodeDomainAddr
+		}
 	}
+
 	return
 }
 

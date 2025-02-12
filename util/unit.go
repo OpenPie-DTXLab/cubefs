@@ -163,17 +163,20 @@ func ParseIpAddrToDomainAddr(ipAddr string) (domainAddr string) {
 	return
 }
 
-func ParseAddrToIpAddr(addr string) (ipAddr string, success bool) {
+func ParseAddrToIpAddr(addr string) (ipAddr, domainAddr string, success bool) {
 	success = true
 	if IsIPV4Addr(addr) {
 		ipAddr = addr
 		return
+	} else {
+		domainAddr = addr
+		ok := true
+		if ipAddr, ok = ParseDomainAddrToIpAddr(addr); !ok {
+			success = false
+			return
+		}
+
 	}
-	if parsedAddr, ok := ParseDomainAddrToIpAddr(addr); ok {
-		ipAddr = parsedAddr
-		return
-	}
-	success = false
 	return
 }
 

@@ -645,12 +645,12 @@ func (s *DataNode) register(cfg *config.Config) {
 				LocalIP = string(ci.Ip)
 			}
 			s.localServerAddr = fmt.Sprintf("%s:%v", LocalIP, s.port)
-			if !util.IsIPV4(LocalIP) {
-				log.LogErrorf("action[registerToMaster] got an invalid local ip(%v) from master(%v).",
-					LocalIP, masterAddr)
-				timer.Reset(2 * time.Second)
-				continue
-			}
+			//if !util.IsIPV4(LocalIP) {
+			//	log.LogErrorf("action[registerToMaster] got an invalid local ip(%v) from master(%v).",
+			//		LocalIP, masterAddr)
+			//	timer.Reset(2 * time.Second)
+			//	continue
+			//}
 
 			// register this data node on the master
 			var nodeID uint64

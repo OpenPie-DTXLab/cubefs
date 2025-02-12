@@ -2873,6 +2873,11 @@ func checkIpPort(addr string) bool {
 	if id, err := strconv.ParseUint(arr[1], 10, 64); err != nil || id > 65535 || id < 1024 {
 		return false
 	}
+
+	if !util.IsIPV4(arr[0]) {
+		return true
+	}
+
 	ip := strings.Trim(addr, " ")
 	regStr := `^(([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){2}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])`
 	if match, _ := regexp.MatchString(regStr, ip); match {
@@ -4753,7 +4758,7 @@ func parseMigrateNodeParam(r *http.Request) (srcAddr, targetAddr string, limit i
 		err = fmt.Errorf("parseMigrateNodeParam %s can't be empty", srcAddrKey)
 		return
 	}
-	if ipAddr, ok := util.ParseAddrToIpAddr(srcAddr); ok {
+	if ipAddr, _, ok := util.ParseAddrToIpAddr(srcAddr); ok {
 		srcAddr = ipAddr
 	}
 
@@ -4762,7 +4767,7 @@ func parseMigrateNodeParam(r *http.Request) (srcAddr, targetAddr string, limit i
 		err = fmt.Errorf("parseMigrateNodeParam %s can't be empty when migrate", targetAddrKey)
 		return
 	}
-	if ipAddr, ok := util.ParseAddrToIpAddr(targetAddr); ok {
+	if ipAddr, _, ok := util.ParseAddrToIpAddr(targetAddr); ok {
 		targetAddr = ipAddr
 	}
 
